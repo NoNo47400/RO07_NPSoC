@@ -282,7 +282,7 @@ def ekf_slam(xEst, PEst, u, y, M_DIST_TH, KNOWN_DATA_ASSOCIATION, Q, Py):
 
 # --- Main script
 
-def main(Landmarks,Q_sim_factor=3, Py_sim_factor=1, Q_factor=2, Py_factor=2, known_data_association=1, max_range=10.0, m_dist_th=9.0, speed=1.0, radius=0.1, bearing_only=False):
+def main(Landmarks,Q_sim_factor=3, Py_sim_factor=1, Q_factor=2, Py_factor=2, known_data_association=1, max_range=10.0, m_dist_th=9.0, speed=1.0, radius=0.1):
     # print(__file__ + " start!!")
     # Simulation parameter
     KNOWN_DATA_ASSOCIATION = known_data_association  # Whether we use the true landmarks id or not
@@ -290,32 +290,26 @@ def main(Landmarks,Q_sim_factor=3, Py_sim_factor=1, Q_factor=2, Py_factor=2, kno
     M_DIST_TH = m_dist_th  # Threshold of Mahalanobis distance for data association.
 
     # noise on control input
-    Q_sim = (Q_sim_factor * np.diag([0.1, np.deg2rad(1)])) ** 2
+    Q_sim = np.diag([0.1, 0.1])
     # noise on measurement
-    Py_sim = (Py_sim_factor * np.diag([0.1, np.deg2rad(5)])) ** 2
+    Py_sim = np.diag([0.2*0.2, (5.0*math.pi/180.0)*(5.0*math.pi/180.0)])
 
     # Kalman filter Parameters
     # Estimated input noise for Kalman Filter
     Q = Q_factor * Q_sim
     # Estimated measurement noise for Kalman Filter
     Py = Py_factor * Py_sim
-
-    time_sim = 0.0
-
     
 
     # Init state vector [x y yaw]' and covariance for Kalman
     xEst = np.zeros((STATE_SIZE, 1))
-    PEst = initPEst
+    PEst = np.eye(STATE_SIZE)
 
     # Init true state for simulator
     xTrue = np.zeros((STATE_SIZE, 1))
 
     # Init dead reckoning (sum of individual controls)
     xDR = np.zeros((STATE_SIZE, 1))
-
-    # Init landmark hypotheses for bearing-only SLAM
-    landmark_hypotheses = {}
 
     # Init history
     hxEst = xEst
@@ -325,231 +319,33 @@ def main(Landmarks,Q_sim_factor=3, Py_sim_factor=1, Q_factor=2, Py_factor=2, kno
     hxVar = np.sqrt(np.diag(PEst[0:STATE_SIZE,0:STATE_SIZE]).reshape(3,1))  #state std dev
 
 
-    count = 0
     time_exec = 0.0
-    while  time_sim <= SIM_TIME:
-        
-        count = count + 1
-        time_sim += DT
 
-        # Simulate motion and generate u and y
-        uTrue = calc_input(speed, radius)
+    # Simulate motion and generate u and y
+    uTrue = calc_input(speed, radius)
 
-        if bearing_only:
-            xTrue, y, xDR, u = observation_bearing_only(xTrue, xDR, uTrue, Landmarks, Q_sim, Py_sim, MAX_RANGE)
-            start_time = time.time()
-            xEst, PEst, landmark_hypotheses = ekf_slam_bearing_only(xEst, PEst, u, y, landmark_hypotheses, Q, Py)
-        else:
-            xTrue, y, xDR, u = observation(xTrue, xDR, uTrue, Landmarks, Q_sim, Py_sim, MAX_RANGE)
-            start_time = time.time()
-            xEst, PEst = ekf_slam(xEst, PEst, u, y, M_DIST_TH, KNOWN_DATA_ASSOCIATION, Q, Py)
-        time_exec = time_exec + time.time()-start_time
-        # store data history
-        hxEst = np.hstack((hxEst, xEst[0:STATE_SIZE]))
-        hxDR = np.hstack((hxDR, xDR))
-        hxTrue = np.hstack((hxTrue, xTrue))
-        err = xEst[0:STATE_SIZE]-xTrue
-        err[2] = pi_2_pi(err[2])
-        hxError = np.hstack((hxError,err))
-        hxVar = np.hstack((hxVar,np.sqrt(np.diag(PEst[0:STATE_SIZE,0:STATE_SIZE]).reshape(3,1))))
-        print("xEst: ", xEst[0:STATE_SIZE].flatten())
-        print("xTrue: ", xTrue.flatten())
-    print("Mean execution time: {:.6f} [us]".format(time_exec/count*1e6))
-
-# Bearing-only SLAM parameters
-HYPOTHESIS_NUM = 5  # Number of hypotheses for undelayed initialization
-HYPOTHESIS_DISTANCES = np.linspace(2.0, 15.0, HYPOTHESIS_NUM)  # Distance range for hypotheses
-HYPOTHESIS_COV_FACTOR = np.array([0.1, 0.5, 1.0, 2.0, 5.0])  # Covariance factors for each hypothesis
-PRUNING_THRESHOLD = 0.01  # Probability threshold for pruning hypotheses
-
-def observation_bearing_only(xTrue, xd, uTrue, Landmarks, Q_sim, Py_sim, MAX_RANGE):
-
-    xTrue = motion_model(xTrue, uTrue)
-    
-    # Bearing-only observations: [angle_to_landmark, landmark_id]
-    y = np.zeros((0, 2))
-    
-    for i in range(len(Landmarks[:, 0])):
-        dx = Landmarks[i, 0] - xTrue[0, 0]
-        dy = Landmarks[i, 1] - xTrue[1, 0]
-        d = math.hypot(dx, dy)
-        angle = pi_2_pi(math.atan2(dy, dx) - xTrue[2, 0])
-        
-        if d <= MAX_RANGE:
-            # Add noise to bearing only
-            angle_n = angle + np.random.randn() * Py_sim[1, 1] ** 0.5
-            yi = np.array([angle_n, i])
-            y = np.vstack((y, yi))
-    
-    # Add noise to input
+    xTrue, y, xDR, u = observation(xTrue, xDR, uTrue, Landmarks, Q_sim, Py_sim, MAX_RANGE)
     u = np.array([[
-        uTrue[0, 0] + np.random.randn() * Q_sim[0, 0] ** 0.5,
-        uTrue[1, 0] + np.random.randn() * Q_sim[1, 1] ** 0.5]]).T
-    
-    xd = motion_model(xd, u)
-    
-    return xTrue, y, xd, u
+        1.0,
+        0.1]]).T
 
-def initialize_landmark_hypotheses(xEst, bearing_measurement):
+    y = np.array([[10.0,0.0,0.0]])
 
-    hypotheses = []
-    robot_x, robot_y, robot_yaw = xEst[0, 0], xEst[1, 0], xEst[2, 0]
-    bearing = bearing_measurement
-    
-    for i, distance in enumerate(HYPOTHESIS_DISTANCES):
-        # Calculate landmark position for this hypothesis
-        lm_x = robot_x + distance * math.cos(robot_yaw + bearing)
-        lm_y = robot_y + distance * math.sin(robot_yaw + bearing)
-        
-        # Covariance increases with distance uncertainty
-        cov_factor = HYPOTHESIS_COV_FACTOR[i]
-        
-        hypothesis = {
-            'position': np.array([[lm_x], [lm_y]]),
-            'cov_factor': cov_factor,
-            'weight': 1.0 / HYPOTHESIS_NUM,  # Equal initial weight
-            'likelihood': 1.0,
-            'measurement_count': 0
-        }
-        hypotheses.append(hypothesis)
-    
-    return hypotheses
+    start_time = time.time()
+    xEst, PEst = ekf_slam(xEst, PEst, u, y, M_DIST_TH, KNOWN_DATA_ASSOCIATION, Q, Py)
+    time_exec = time.time()-start_time
+    # store data history
+    hxEst = np.hstack((hxEst, xEst[0:STATE_SIZE]))
+    hxDR = np.hstack((hxDR, xDR))
+    hxTrue = np.hstack((hxTrue, xTrue))
+    err = xEst[0:STATE_SIZE]-xTrue
+    err[2] = pi_2_pi(err[2])
+    hxError = np.hstack((hxError,err))
+    hxVar = np.hstack((hxVar,np.sqrt(np.diag(PEst[0:STATE_SIZE,0:STATE_SIZE]).reshape(3,1))))
+    print("xEst: ", xEst)
+    print("PEst: ", PEst)
+    print("Execution time: {:.6f} [us]".format(time_exec*1e6))
 
-def update_hypothesis_weights(hypotheses, xEst, bearing_measurement, Py_bearing):
-
-    likelihoods = []
-    total_likelihood = 0.0
-    robot_x, robot_y, robot_yaw = xEst[0, 0], xEst[1, 0], xEst[2, 0]
-    
-    for hyp in hypotheses:
-        lm_x, lm_y = hyp['position'][0, 0], hyp['position'][1, 0]
-        dx = lm_x - robot_x
-        dy = lm_y - robot_y
-        
-        predicted_bearing = pi_2_pi(math.atan2(dy, dx) - robot_yaw)
-        
-        innovation = pi_2_pi(bearing_measurement - predicted_bearing)
-        
-        # Add distance-dependent measurement uncertainty
-        distance = math.hypot(dx, dy)
-        measurement_std = math.sqrt(Py_bearing[1, 1]) * (1.0 + 0.1 * distance)
-        likelihood = math.exp(-0.5 * (innovation ** 2) / (measurement_std ** 2))
-        
-        likelihoods.append(likelihood)
-        total_likelihood += likelihood
-    
-    # Normalize weights
-    if total_likelihood > 0:
-        for i, hyp in enumerate(hypotheses):
-            hyp['weight'] = likelihoods[i] / total_likelihood
-            hyp['likelihood'] = likelihoods[i]
-            hyp['measurement_count'] += 1
-    
-    return hypotheses
-
-def prune_hypotheses(hypotheses, threshold=PRUNING_THRESHOLD):
-
-    pruned = [h for h in hypotheses if h['weight'] > threshold]
-    
-    if len(pruned) == 0:  # Keep best hypothesis
-        best_idx = np.argmax([h['weight'] for h in hypotheses])
-        pruned = [hypotheses[best_idx]]
-    
-    return pruned
-
-def jacob_h_bearing_only(delta, x, i):
-
-    q = (delta.T @ delta)[0, 0]
-    
-    nLM = calc_n_lm(x)
-    
-    # Jacobian is 1 x (3 + 2*nLM)
-    H = np.zeros((1, 3 + 2 * nLM))
-    
-    # Robot pose part: [dh/dx, dh/dy, dh/dyaw]
-    H[0, 0] = delta[1, 0] / q  # dh/dx_robot
-    H[0, 1] = -delta[0, 0] / q  # dh/dy_robot
-    H[0, 2] = -1.0  # dh/dyaw_robot
-    
-    # Landmark position part: only landmark i is relevant
-    H[0, 3 + 2*i] = -delta[1, 0] / q  # dh/dlm_x
-    H[0, 3 + 2*i + 1] = delta[0, 0] / q  # dh/dlm_y
-    
-    return H
-
-def calc_innovation_bearing_only(xEst, PEst, y, LMid, Py):
-
-    # Predicted bearing from state
-    lm = get_landmark_position_from_state(xEst, LMid)
-    delta = lm - xEst[0:2]
-    q = (delta.T @ delta)[0, 0]
-    
-    # Avoid division by zero
-    if q < 1e-10:
-        q = 1e-10
-    
-    y_angle = math.atan2(delta[1, 0], delta[0, 0]) - xEst[2, 0]
-    yp = pi_2_pi(y_angle)
-    
-    innov = np.array([[pi_2_pi(y - yp)]])
-    
-    H = jacob_h_bearing_only(delta, xEst, LMid)
-    
-    S = H @ PEst @ H.T + Py[1:2, 1:2]
-    
-    return innov, S, H
-
-def ekf_slam_bearing_only(xEst, PEst, u, y, landmark_hypotheses, Q, Py):
-
-    S = STATE_SIZE
-    
-    A, B = jacob_motion(xEst[0:S], u)
-    xEst[0:S] = motion_model(xEst[0:S], u)
-    PEst[0:S, 0:S] = A @ PEst[0:S, 0:S] @ A.T + B @ Q @ B.T
-    PEst[0:S, S:] = A @ PEst[0:S, S:]
-    PEst[S:, 0:S] = PEst[0:S, S:].T
-    PEst = (PEst + PEst.T) / 2.0
-    
-    for iy in range(len(y[:, 0])):
-        bearing = y[iy, 0]
-        lm_id = int(y[iy, 1])
-        
-        nLM = calc_n_lm(xEst)
-        
-        if lm_id not in landmark_hypotheses:
-            landmark_hypotheses[lm_id] = initialize_landmark_hypotheses(xEst, bearing)
-        
-        else:
-            landmark_hypotheses[lm_id] = update_hypothesis_weights(
-                landmark_hypotheses[lm_id], xEst, bearing, Py)
-            
-            landmark_hypotheses[lm_id] = prune_hypotheses(landmark_hypotheses[lm_id])
-            
-            # Use best hypothesis
-            best_hyp = max(landmark_hypotheses[lm_id], key=lambda h: h['weight'])
-            
-            # Add to state only after measurement count threshold
-            if best_hyp['measurement_count'] >= 3 and lm_id >= nLM:
-                xEst = np.vstack((xEst, best_hyp['position']))
-                
-                P_lm_cov = (best_hyp['cov_factor'] ** 2) * np.eye(2) * 5.0
-                PEst = np.vstack((np.hstack((PEst, np.zeros((len(xEst)-2, 2)))),
-                                  np.hstack((np.zeros((2, len(xEst)-2)), P_lm_cov))))
-            
-            if lm_id < calc_n_lm(xEst):
-                try:
-                    innov, S, H = calc_innovation_bearing_only(xEst, PEst, bearing, lm_id, Py)
-                    S_inv = np.linalg.inv(S)
-                    K = (PEst @ H.T) @ S_inv
-                    xEst = xEst + (K @ innov).reshape(xEst.shape)
-                    PEst = (np.eye(len(xEst)) - K @ H) @ PEst
-                    PEst = 0.5 * (PEst + PEst.T)
-                except (np.linalg.LinAlgError, ValueError):
-                    pass  # Skip update if singular or dimension mismatch
-    
-    xEst[2] = pi_2_pi(xEst[2])
-    
-    return xEst, PEst, landmark_hypotheses
 
 trueLandmarkId = []
 landmark_hypotheses = {}
@@ -560,6 +356,5 @@ Landmarks_Default = np.array([[0.0, 5.0],
                              [-5.0, 20.0]])
 
 main(Landmarks=Landmarks_Default, 
-     bearing_only=False,
      Q_sim_factor=2,
      Py_sim_factor=0.5)
