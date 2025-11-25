@@ -318,7 +318,7 @@ def main(Landmarks,Q_sim_factor=3, Py_sim_factor=1, Q_factor=2, Py_factor=2, kno
             [15.0169684 ],
             [-5.28442142],
             [19.95406455]])
-    PEst = np.eye(STATE_SIZE)
+    PEst = np.eye(15)
 
     # Init true state for simulator
     xTrue = np.zeros((STATE_SIZE, 1))
