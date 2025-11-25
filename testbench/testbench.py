@@ -302,7 +302,22 @@ def main(Landmarks,Q_sim_factor=3, Py_sim_factor=1, Q_factor=2, Py_factor=2, kno
     
 
     # Init state vector [x y yaw]' and covariance for Kalman
-    xEst = np.zeros((STATE_SIZE, 1))
+    #xEst = np.zeros((STATE_SIZE, 1))
+    xEst = np.array([[-5.62815962],
+            [18.37374747],
+            [-2.54979418],
+            [-0.09302817],
+            [ 4.97980269],
+            [ 6.11371654],
+            [-6.91804677],
+            [10.97515561],
+            [ 1.16371694],
+            [14.82922   ],
+            [10.21498871],
+            [ 2.74484343],
+            [15.0169684 ],
+            [-5.28442142],
+            [19.95406455]])
     PEst = np.eye(STATE_SIZE)
 
     # Init true state for simulator
@@ -312,11 +327,11 @@ def main(Landmarks,Q_sim_factor=3, Py_sim_factor=1, Q_factor=2, Py_factor=2, kno
     xDR = np.zeros((STATE_SIZE, 1))
 
     # Init history
-    hxEst = xEst
-    hxTrue = xTrue
-    hxDR = xTrue
-    hxError = np.abs(xEst-xTrue)  # pose error
-    hxVar = np.sqrt(np.diag(PEst[0:STATE_SIZE,0:STATE_SIZE]).reshape(3,1))  #state std dev
+    # hxEst = xEst
+    # hxTrue = xTrue
+    # hxDR = xTrue
+    # hxError = np.abs(xEst-xTrue)  # pose error
+    # hxVar = np.sqrt(np.diag(PEst[0:STATE_SIZE,0:STATE_SIZE]).reshape(3,1))  #state std dev
 
 
     time_exec = 0.0
@@ -335,13 +350,13 @@ def main(Landmarks,Q_sim_factor=3, Py_sim_factor=1, Q_factor=2, Py_factor=2, kno
     xEst, PEst = ekf_slam(xEst, PEst, u, y, M_DIST_TH, KNOWN_DATA_ASSOCIATION, Q, Py)
     time_exec = time.time()-start_time
     # store data history
-    hxEst = np.hstack((hxEst, xEst[0:STATE_SIZE]))
-    hxDR = np.hstack((hxDR, xDR))
-    hxTrue = np.hstack((hxTrue, xTrue))
-    err = xEst[0:STATE_SIZE]-xTrue
-    err[2] = pi_2_pi(err[2])
-    hxError = np.hstack((hxError,err))
-    hxVar = np.hstack((hxVar,np.sqrt(np.diag(PEst[0:STATE_SIZE,0:STATE_SIZE]).reshape(3,1))))
+    # hxEst = np.hstack((hxEst, xEst[0:STATE_SIZE]))
+    # hxDR = np.hstack((hxDR, xDR))
+    # hxTrue = np.hstack((hxTrue, xTrue))
+    # err = xEst[0:STATE_SIZE]-xTrue
+    # err[2] = pi_2_pi(err[2])
+    # hxError = np.hstack((hxError,err))
+    # hxVar = np.hstack((hxVar,np.sqrt(np.diag(PEst[0:STATE_SIZE,0:STATE_SIZE]).reshape(3,1))))
     print("xEst: ", xEst)
     print("PEst: ", PEst)
     print("Execution time: {:.6f} [us]".format(time_exec*1e6))

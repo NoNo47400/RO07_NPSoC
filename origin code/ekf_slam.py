@@ -352,7 +352,7 @@ def main(Landmarks,Q_sim_factor=3, Py_sim_factor=1, Q_factor=2, Py_factor=2, kno
         err[2] = pi_2_pi(err[2])
         hxError = np.hstack((hxError,err))
         hxVar = np.hstack((hxVar,np.sqrt(np.diag(PEst[0:STATE_SIZE,0:STATE_SIZE]).reshape(3,1))))
-        print("xEst: ", xEst[0:STATE_SIZE].flatten())
+        print("xEst: ", xEst)
         print("xTrue: ", xTrue.flatten())
     print("Mean execution time: {:.6f} [us]".format(time_exec/count*1e6))
 
@@ -557,7 +557,11 @@ landmark_hypotheses = {}
 Landmarks_Default = np.array([[0.0, 5.0],
                              [11.0, 1.0],
                              [3.0, 15.0],
-                             [-5.0, 20.0]])
+                             [-5.0, 20.0], 
+                             [20.0, 15.0],
+                             [15.0, 10.0],
+                             [17.0, -4.0],
+                             [6.0, -7.0]])
 
 main(Landmarks=Landmarks_Default, 
      bearing_only=False,
