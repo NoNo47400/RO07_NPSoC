@@ -17,10 +17,10 @@
 #define MAX_COLS 13
 
 // --- Algorithm Constants ---
-const float DT = 0.1;
-const float M_DIST_TH = 2.0;
+const float DT = 0.1;           
+const float M_DIST_TH = 2.0;    
 
-typedef float data_t; // Peut Ãªtre changÃ© en float ou ap_fixed pour gagner de la surface
+typedef float data_t; // Peut être changé en float ou ap_fixed pour gagner de la surface
 
 // --- Classe Matrix SynthÃ©tisable ---
 struct Matrix {
