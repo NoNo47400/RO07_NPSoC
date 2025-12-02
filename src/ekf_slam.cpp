@@ -1,4 +1,5 @@
 #include "ekf_slam.h"
+#include <cstdio>
 
 // --- Helper Functions ---
 
@@ -197,23 +198,21 @@ void ekf_slam_top(
     data_t x_out[MAX_ROWS], int &x_rows_out,
     data_t P_out[MAX_ROWS*MAX_ROWS], int &P_rows_out
 ) {
-
-
-    // 1. Reconstruction des objets Matrix locaux (copie depuis la mÃ©moire)
+    // 1. Chargement CORRECT des vecteurs (Gestion du stride)
     Matrix xEst; xEst.rows = x_rows; xEst.cols = 1;
-    for(int i=0; i<MAX_ROWS; i++) xEst.data[i] = x_in[i];
+    for(int i=0; i<x_rows; i++) xEst.at(i, 0) = x_in[i]; // Utiliser .at() !
 
     Matrix PEst; PEst.rows = P_rows; PEst.cols = P_rows;
-    for(int i=0; i<MAX_ROWS*MAX_ROWS; i++) PEst.data[i] = P_in[i];
+    for(int i=0; i<MAX_ROWS*MAX_ROWS; i++) PEst.data[i] = P_in[i]; // P est déjà au bon format 13x13
 
-    Matrix u; u.rows = 2; u.cols = 1; u.at(0,0) = u_in[0]; u.at(1,0) = u_in[1];
+    Matrix u; u.rows = 2; u.cols = 1; 
+    u.at(0,0) = u_in[0]; u.at(1,0) = u_in[1]; // Utiliser .at()
     
-    // Matrices de bruit (diagonales)
     Matrix Q; Q.rows=2; Q.cols=2; Q.at(0,0)=Q_in[0]; Q.at(1,1)=Q_in[1]; Q.at(0,1)=0; Q.at(1,0)=0;
     Matrix R; R.rows=2; R.cols=2; R.at(0,0)=R_in[0]; R.at(1,1)=R_in[1]; R.at(0,1)=0; R.at(1,0)=0;
     
-    // --- PREDICTION ---
-    int S = 3; // Robot state size
+    // --- PREDICTION (Toujours exécutée) ---
+    int S = 3; 
     Matrix x_robot; get_block(xEst, 0, 0, S, 1, x_robot);
     
     Matrix A, B;
@@ -223,25 +222,16 @@ void ekf_slam_top(
     motion_model(x_robot, u, xPred);
     set_block(xEst, 0, 0, xPred);
     
-    // P = A*P*At + B*Q*Bt (Simplification: bloc robot seulement pour le moment, puis cross-cov)
-    // NOTE: Pour HLS, on fait une mise Ã  jour complÃ¨te de P en place
-    // Pxx Update
     Matrix Pxx; get_block(PEst, 0, 0, S, S, Pxx);
     Matrix At, Bt, AP, APA, BQ, BQB;
-    mat_transpose(A, At);
-    mat_transpose(B, Bt);
-    
-    mat_mul(A, Pxx, AP);
-    mat_mul(AP, At, APA);
-    
-    mat_mul(B, Q, BQ);
-    mat_mul(BQ, Bt, BQB);
+    mat_transpose(A, At); mat_transpose(B, Bt);
+    mat_mul(A, Pxx, AP); mat_mul(AP, At, APA);
+    mat_mul(B, Q, BQ); mat_mul(BQ, Bt, BQB);
     
     Matrix Pxx_new;
     mat_add(APA, BQB, Pxx_new);
     set_block(PEst, 0, 0, Pxx_new);
     
-    // Cross covariance update if landmarks exist
     if (PEst.rows > S) {
         Matrix Pxm; 
         get_block(PEst, 0, S, S, PEst.cols - S, Pxm);
@@ -253,126 +243,100 @@ void ekf_slam_top(
         mat_transpose(Pxm_new, Pxm_new_t);
         set_block(PEst, S, 0, Pxm_new_t);
     }
-    
     xEst.at(2, 0) = pi_2_pi(xEst.get(2, 0));
 
-    // --- UPDATE ---
-    Matrix z_i; z_i.rows=2; z_i.cols=1; // [range, angle]
-    z_i.at(0,0) = z_in[0];
-    z_i.at(1,0) = z_in[1];
+    // --- UPDATE (Conditionnelle) ---
+    // Correction 2: Ignorer les mesures aberrantes (> 20.0m)
+    if (z_in[0] < 20.0) {
+        Matrix z_i; z_i.rows=2; z_i.cols=1; 
+        z_i.at(0,0) = z_in[0];
+        z_i.at(1,0) = z_in[1];
 
-    int nLM = calc_n_lm(xEst);
-    int min_id = nLM;
-    float min_dist = M_DIST_TH;
+        int nLM = calc_n_lm(xEst);
+        int min_id = nLM;
+        float min_dist = M_DIST_TH;
 
-    // Data Association
-    loop_da: for (int i = 0; i < MAX_LANDMARKS; ++i) {
-        if (i < nLM) {
-            Matrix innov, S_mat, H;
-            calc_innovation(xEst, PEst, z_i, i, R, innov, S_mat, H);
-            
-            Matrix S_inv;
-            if (mat_inv2x2(S_mat, S_inv)) {
-                Matrix innov_t, dist_tmp;
-                mat_transpose(innov, innov_t);
-                Matrix Sinv_innov;
-                mat_mul(S_inv, innov, Sinv_innov);
-                mat_mul(innov_t, Sinv_innov, dist_tmp);
-                
-                float dist = dist_tmp.get(0,0);
-                if (dist < min_dist) {
-                    min_dist = dist;
-                    min_id = i;
+        // Data Association
+        loop_da: for (int i = 0; i < MAX_LANDMARKS; ++i) {
+            if (i < nLM) {
+                Matrix innov, S_mat, H;
+                calc_innovation(xEst, PEst, z_i, i, R, innov, S_mat, H);
+                Matrix S_inv;
+                if (mat_inv2x2(S_mat, S_inv)) {
+                    Matrix innov_t, dist_tmp, Sinv_innov;
+                    mat_transpose(innov, innov_t);
+                    mat_mul(S_inv, innov, Sinv_innov);
+                    mat_mul(innov_t, Sinv_innov, dist_tmp);
+                    float dist = dist_tmp.get(0,0);
+                    if (dist < min_dist) {
+                        min_dist = dist;
+                        min_id = i;
+                    }
                 }
             }
         }
-    }
 
-    if (min_id == nLM && nLM < MAX_LANDMARKS) {
-        // --- ADD NEW LANDMARK ---
-        // Calc position
-        float r = z_i.get(0,0);
-        float angle = z_i.get(1,0);
-        float yaw = xEst.get(2,0);
-        
-        // Extend State
-        int old_rows = xEst.rows;
-        xEst.rows += 2; 
-        xEst.at(old_rows, 0)   = xEst.get(0,0) + r * std::cos(yaw + angle);
-        xEst.at(old_rows+1, 0) = xEst.get(1,0) + r * std::sin(yaw + angle);
+        if (min_id == nLM && nLM < MAX_LANDMARKS) {
+            printf("[CPP] NEW LANDMARK FOUND! ID=%d Range=%.2f\n", nLM, z_in[0]);
+            float r = z_i.get(0,0);
+            float angle = z_i.get(1,0);
+            float yaw = xEst.get(2,0);
+            
+            int old_rows = xEst.rows;
+            xEst.rows += 2; 
+            xEst.at(old_rows, 0)   = xEst.get(0,0) + r * std::cos(yaw + angle);
+            xEst.at(old_rows+1, 0) = xEst.get(1,0) + r * std::sin(yaw + angle);
 
-        // Extend Covariance
-        // Jr, Jz calculation
-        Matrix Jr; Jr.rows=2; Jr.cols=3;
-        Jr.at(0,0)=1; Jr.at(0,1)=0; Jr.at(0,2)=-r*std::sin(yaw+angle);
-        Jr.at(1,0)=0; Jr.at(1,1)=1; Jr.at(1,2)= r*std::cos(yaw+angle);
-        
-        Matrix Jz; Jz.rows=2; Jz.cols=2;
-        Jz.at(0,0)=std::cos(yaw+angle); Jz.at(0,1)=-r*std::sin(yaw+angle);
-        Jz.at(1,0)=std::sin(yaw+angle); Jz.at(1,1)= r*std::cos(yaw+angle);
+            PEst.rows += 2; PEst.cols += 2;
+            
+            Matrix Jr; Jr.rows=2; Jr.cols=3;
+            Jr.at(0,0)=1; Jr.at(0,1)=0; Jr.at(0,2)=-r*std::sin(yaw+angle);
+            Jr.at(1,0)=0; Jr.at(1,1)=1; Jr.at(1,2)= r*std::cos(yaw+angle);
+            
+            Matrix Jz; Jz.rows=2; Jz.cols=2;
+            Jz.at(0,0)=std::cos(yaw+angle); Jz.at(0,1)=-r*std::sin(yaw+angle);
+            Jz.at(1,0)=std::sin(yaw+angle); Jz.at(1,1)= r*std::cos(yaw+angle);
 
-        // Resize P
-        PEst.rows += 2; PEst.cols += 2;
-        
-        // P[new, map] = Jr * P[robot, map]
-        Matrix P_robot_map;
-        get_block(PEst, 0, 0, 3, old_rows, P_robot_map);
-        Matrix P_new_lm_map;
-        mat_mul(Jr, P_robot_map, P_new_lm_map);
-        
-        set_block(PEst, old_rows, 0, P_new_lm_map);
-        Matrix P_new_lm_map_t;
-        mat_transpose(P_new_lm_map, P_new_lm_map_t);
-        set_block(PEst, 0, old_rows, P_new_lm_map_t);
-        
-        // P[new, new]
-        Matrix P_robot; get_block(PEst, 0, 0, 3, 3, P_robot);
-        Matrix JrP, JrPJrt, JzR, JzRJzt, P_lmlm;
-        Matrix Jrt, Jzt;
-        mat_transpose(Jr, Jrt);
-        mat_transpose(Jz, Jzt);
-        
-        mat_mul(Jr, P_robot, JrP);
-        mat_mul(JrP, Jrt, JrPJrt);
-        mat_mul(Jz, R, JzR);
-        mat_mul(JzR, Jzt, JzRJzt);
-        mat_add(JrPJrt, JzRJzt, P_lmlm);
-        
-        set_block(PEst, old_rows, old_rows, P_lmlm);
+            Matrix P_robot_map; get_block(PEst, 0, 0, 3, old_rows, P_robot_map);
+            Matrix P_new_lm_map; mat_mul(Jr, P_robot_map, P_new_lm_map);
+            
+            set_block(PEst, old_rows, 0, P_new_lm_map);
+            Matrix P_new_lm_map_t; mat_transpose(P_new_lm_map, P_new_lm_map_t);
+            set_block(PEst, 0, old_rows, P_new_lm_map_t);
+            
+            Matrix P_robot; get_block(PEst, 0, 0, 3, 3, P_robot);
+            Matrix JrP, JrPJrt, JzR, JzRJzt, P_lmlm;
+            Matrix Jrt, Jzt;
+            mat_transpose(Jr, Jrt); mat_transpose(Jz, Jzt);
+            
+            mat_mul(Jr, P_robot, JrP); mat_mul(JrP, Jrt, JrPJrt);
+            mat_mul(Jz, R, JzR); mat_mul(JzR, Jzt, JzRJzt);
+            mat_add(JrPJrt, JzRJzt, P_lmlm);
+            set_block(PEst, old_rows, old_rows, P_lmlm);
 
-    } else if (min_id < nLM) {
-        // --- UPDATE EXISTING ---
-        Matrix innov, S_mat, H;
-        calc_innovation(xEst, PEst, z_i, min_id, R, innov, S_mat, H);
-        
-        Matrix S_inv;
-        mat_inv2x2(S_mat, S_inv); // Assume invertible
-        
-        Matrix Ht, PHt, K;
-        mat_transpose(H, Ht);
-        mat_mul(PEst, Ht, PHt);
-        mat_mul(PHt, S_inv, K); // Kalman Gain
-        
-        // x = x + K * innov
-        Matrix K_innov;
-        mat_mul(K, innov, K_innov);
-        mat_add(xEst, K_innov, xEst);
-        
-        // P = (I - KH) P
-        Matrix KH, I, I_KH, P_new;
-        Matrix::identity(PEst.rows, I);
-        mat_mul(K, H, KH);
-        mat_sub(I, KH, I_KH);
-        mat_mul(I_KH, PEst, P_new);
-        PEst = P_new;
-    }
-    
-    xEst.at(2, 0) = pi_2_pi(xEst.get(2, 0));
+        } else if (min_id < nLM) {
+            Matrix innov, S_mat, H;
+            calc_innovation(xEst, PEst, z_i, min_id, R, innov, S_mat, H);
+            Matrix S_inv; mat_inv2x2(S_mat, S_inv); 
+            Matrix Ht, PHt, K;
+            mat_transpose(H, Ht); mat_mul(PEst, Ht, PHt); mat_mul(PHt, S_inv, K); 
+            Matrix K_innov; mat_mul(K, innov, K_innov);
+            mat_add(xEst, K_innov, xEst);
+            Matrix KH, I, I_KH, P_new;
+            Matrix::identity(PEst.rows, I);
+            mat_mul(K, H, KH); mat_sub(I, KH, I_KH); mat_mul(I_KH, PEst, P_new);
+            PEst = P_new;
+        }
+        xEst.at(2, 0) = pi_2_pi(xEst.get(2, 0));
+    } // Fin condition z_in < 20.0
 
-    // Write back outputs
+    // Write back outputs (Correction 3: Sauvegarde CORRECTE)
     x_rows_out = xEst.rows;
     P_rows_out = PEst.rows;
     
-    loop_out_x: for(int i=0; i<MAX_ROWS; i++) x_out[i] = xEst.data[i];
-    loop_out_p: for(int i=0; i<MAX_ROWS*MAX_ROWS; i++) P_out[i] = PEst.data[i];
+    // On copie en utilisant .at() pour rassembler les données éparpillées
+    for(int i=0; i<x_rows_out; i++) x_out[i] = xEst.at(i, 0); 
+    
+    // P est déjà plat et aligné, on peut copier direct
+    for(int i=0; i<MAX_ROWS*MAX_ROWS; i++) P_out[i] = PEst.data[i];
 }
