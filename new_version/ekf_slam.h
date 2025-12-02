@@ -8,21 +8,21 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-// Configuration de la taille (Compromis Surface vs Capacité)
+// Configuration de la taille (Compromis Surface vs CapacitÃ©)
 #define MAX_LANDMARKS 5
 #define STATE_SIZE 3
 #define LM_SIZE 2
 // Taille maximale absolue des matrices (Robots + 5 Landmarks = 3 + 10 = 13)
-#define MAX_ROWS 13 
-#define MAX_COLS 13 
+#define MAX_ROWS 13
+#define MAX_COLS 13
 
 // --- Algorithm Constants ---
-const double DT = 0.1;           
-const double M_DIST_TH = 2.0;    
+const float DT = 0.1;
+const float M_DIST_TH = 2.0;
 
-typedef double data_t; // Peut être changé en float ou ap_fixed pour gagner de la surface
+typedef float data_t; // Peut Ãªtre changÃ© en float ou ap_fixed pour gagner de la surface
 
-// --- Classe Matrix Synthétisable ---
+// --- Classe Matrix SynthÃ©tisable ---
 struct Matrix {
     int rows;
     int cols;
@@ -30,22 +30,20 @@ struct Matrix {
 
     // Constructeurs
     Matrix() : rows(0), cols(0) {
-        #pragma HLS ARRAY_PARTITION variable=data cyclic factor=2 dim=1
+		#pragma HLS RESOURCE variable=data core=RAM_1P_BRAM
         for(int i=0; i<MAX_ROWS*MAX_COLS; i++) data[i] = 0.0;
     }
 
-    // Accès (linéarisation 2D -> 1D)
+    // AccÃ¨s (linÃ©arisation 2D -> 1D)
     data_t& at(int r, int c) {
-        #pragma HLS INLINE
         return data[r * MAX_COLS + c];
     }
     
     data_t get(int r, int c) const {
-        #pragma HLS INLINE
         return data[r * MAX_COLS + c];
     }
 
-    // Initialisation Identité
+    // Initialisation IdentitÃ©
     static void identity(int n, Matrix &res) {
         res.rows = n; res.cols = n;
         for (int i = 0; i < n; i++) {

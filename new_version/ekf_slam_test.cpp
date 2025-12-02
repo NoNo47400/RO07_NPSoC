@@ -21,7 +21,7 @@ int main() {
     // 1. Inputs Buffers
     data_t x_in[MAX_ROWS] = {0};
     // Initial Robot State (-5.62...)
-    double init_data[15] = {-5.62815962, 18.37374747, -2.54979418};
+    float init_data[15] = {-5.62815962, 18.37374747, -2.54979418};
     for(int i=0; i<3; i++) x_in[i] = init_data[i];
     int x_rows = 3;
 
@@ -62,13 +62,13 @@ int main() {
     std::cout << "Done." << std::endl;
     std::cout << "New State Size: " << x_rows_out << std::endl;
     
-    // On s'attend à ce que le robot ait bougé et qu'un landmark ait été ajouté (Size passe de 3 à 5)
+    // On s'attend Ã  ce que le robot ait bougÃ© et qu'un landmark ait Ã©tÃ© ajoutÃ© (Size passe de 3 Ã  5)
     print_matrix("x_out", x_out, x_rows_out, 1);
     
     // Check Landmark pos
     if (x_rows_out >= 5) {
-        double lm_x = x_out[3];
-        double lm_y = x_out[4];
+        float lm_x = x_out[3];
+        float lm_y = x_out[4];
         std::cout << "Landmark detected at: [" << lm_x << ", " << lm_y << "]" << std::endl;
     }
 

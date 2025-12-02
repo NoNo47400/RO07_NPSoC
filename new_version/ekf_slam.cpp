@@ -3,17 +3,16 @@
 // --- Helper Functions ---
 
 // Normalisation d'angle
-double pi_2_pi(double angle) {
+float pi_2_pi(float angle) {
     while (angle >= M_PI) angle -= 2.0 * M_PI;
     while (angle < -M_PI) angle += 2.0 * M_PI;
     return angle;
 }
 
-// Opérations Matricielles Basiques optimisées pour HLS
+// OpÃ©rations Matricielles Basiques optimisÃ©es pour HLS
 void mat_add(const Matrix &A, const Matrix &B, Matrix &C) {
     C.rows = A.rows; C.cols = A.cols;
     loop_add: for (int i = 0; i < MAX_ROWS; i++) {
-        #pragma HLS PIPELINE II=1
         if (i < A.rows * A.cols) // Bound check logique
              C.data[i] = A.data[i] + B.data[i];
     }
@@ -22,7 +21,6 @@ void mat_add(const Matrix &A, const Matrix &B, Matrix &C) {
 void mat_sub(const Matrix &A, const Matrix &B, Matrix &C) {
     C.rows = A.rows; C.cols = A.cols;
     loop_sub: for (int i = 0; i < MAX_ROWS; i++) {
-        #pragma HLS PIPELINE II=1
         if (i < A.rows * A.cols)
             C.data[i] = A.data[i] - B.data[i];
     }
@@ -32,7 +30,6 @@ void mat_mul(const Matrix &A, const Matrix &B, Matrix &C) {
     C.rows = A.rows; C.cols = B.cols;
     loop_mul_row: for (int i = 0; i < MAX_ROWS; ++i) {
         loop_mul_col: for (int j = 0; j < MAX_ROWS; ++j) {
-            #pragma HLS PIPELINE
             if (i < A.rows && j < B.cols) {
                 data_t sum = 0;
                 loop_mul_inner: for (int k = 0; k < MAX_ROWS; ++k) {
@@ -49,16 +46,14 @@ void mat_transpose(const Matrix &A, Matrix &C) {
     C.rows = A.cols; C.cols = A.rows;
     loop_trans_row: for(int i=0; i<MAX_ROWS; i++) {
         loop_trans_col: for(int j=0; j<MAX_ROWS; j++) {
-            #pragma HLS PIPELINE
             if(i < A.rows && j < A.cols)
                 C.at(j,i) = A.get(i,j);
         }
     }
 }
 
-// Inversion 2x2 optimisée (Hardcodée pour éviter la décomposition LU générique)
+// Inversion 2x2 optimisÃ©e (HardcodÃ©e pour Ã©viter la dÃ©composition LU gÃ©nÃ©rique)
 bool mat_inv2x2(const Matrix &A, Matrix &C) {
-    #pragma HLS INLINE
     data_t det = A.get(0,0)*A.get(1,1) - A.get(0,1)*A.get(1,0);
     if (std::abs(det) < 1e-6) return false;
     data_t invDet = 1.0 / det;
@@ -93,13 +88,12 @@ void set_block(Matrix &dst, int r, int c, const Matrix &src) {
 // --- EKF Logic Helpers ---
 
 int calc_n_lm(const Matrix& x) {
-    #pragma HLS INLINE
     return (x.rows - STATE_SIZE) / LM_SIZE;
 }
 
 void motion_model(const Matrix& x, const Matrix& u, Matrix &x_pred) {
     x_pred = x; // Copie
-    double yaw = x.get(2, 0);
+    float yaw = x.get(2, 0);
     x_pred.at(0, 0) += u.get(0, 0) * DT * std::cos(yaw);
     x_pred.at(1, 0) += u.get(0, 0) * DT * std::sin(yaw);
     x_pred.at(2, 0) += u.get(1, 0) * DT;
@@ -108,8 +102,8 @@ void motion_model(const Matrix& x, const Matrix& u, Matrix &x_pred) {
 
 void jacob_motion(const Matrix& x, const Matrix& u, Matrix &A, Matrix &B) {
     Matrix::identity(3, A);
-    double yaw = x.get(2, 0);
-    double v = u.get(0, 0);
+    float yaw = x.get(2, 0);
+    float v = u.get(0, 0);
     
     A.at(0, 2) = -DT * v * std::sin(yaw);
     A.at(1, 2) = DT * v * std::cos(yaw);
@@ -123,8 +117,8 @@ void jacob_motion(const Matrix& x, const Matrix& u, Matrix &A, Matrix &B) {
     B.at(2, 1) = DT;
 }
 
-void jacob_h(double q, const Matrix& delta, const Matrix& x, int i, Matrix &H) {
-    double sq = std::sqrt(q);
+void jacob_h(float q, const Matrix& delta, const Matrix& x, int i, Matrix &H) {
+    float sq = std::sqrt(q);
     
     // G (2x5) local Jacobian
     data_t G_data[10];
@@ -135,28 +129,28 @@ void jacob_h(double q, const Matrix& delta, const Matrix& x, int i, Matrix &H) {
     // H (2 x Total_States)
     H.rows = 2; H.cols = 3 + 2 * nLM;
     
-    // Construction directe de H = G * F sans créer la matrice immense F (sparse)
+    // Construction directe de H = G * F sans crÃ©er la matrice immense F (sparse)
     // Indexes: Robot (0,1,2), Landmark (3+2*i, 3+2*i+1)
     
     // Reset H
     for(int k=0; k<MAX_ROWS*2; k++) H.data[k] = 0.0;
 
-    double inv_q = 1.0 / q;
+    float inv_q = 1.0 / q;
 
     // Remplissage partie Robot (colonnes 0,1,2)
-    // G * I(3) -> Les 3 premières colonnes de G divisées par q
+    // G * I(3) -> Les 3 premiÃ¨res colonnes de G divisÃ©es par q
     H.at(0,0) = G_data[0] * inv_q; H.at(0,1) = G_data[1] * inv_q; H.at(0,2) = G_data[2] * inv_q;
     H.at(1,0) = G_data[5] * inv_q; H.at(1,1) = G_data[6] * inv_q; H.at(1,2) = G_data[7] * inv_q;
 
-    // Remplissage partie Landmark (colonnes correspondant à l'ID i)
+    // Remplissage partie Landmark (colonnes correspondant Ã  l'ID i)
     int lm_idx = 3 + 2 * i;
     // G * Bloc(1,0; 0,1) aux indices
     H.at(0, lm_idx)   = G_data[3] * inv_q; H.at(0, lm_idx+1) = G_data[4] * inv_q;
     H.at(1, lm_idx)   = G_data[8] * inv_q; H.at(1, lm_idx+1) = G_data[9] * inv_q;
 }
 
-// Calcul de l'innovation et des matrices associées
-// Retourne innov, S, H par référence
+// Calcul de l'innovation et des matrices associÃ©es
+// Retourne innov, S, H par rÃ©fÃ©rence
 void calc_innovation(const Matrix& xEst, const Matrix& PEst, const Matrix& z_meas, int lm_id, const Matrix& R,
                      Matrix &innov, Matrix &S, Matrix &H) 
 {
@@ -171,8 +165,8 @@ void calc_innovation(const Matrix& xEst, const Matrix& PEst, const Matrix& z_mea
     Matrix delta;
     mat_sub(lm_pos, robot_pos, delta);
     
-    double q = delta.get(0,0)*delta.get(0,0) + delta.get(1,0)*delta.get(1,0);
-    double z_angle = std::atan2(delta.get(1, 0), delta.get(0, 0)) - xEst.get(2, 0);
+    float q = delta.get(0,0)*delta.get(0,0) + delta.get(1,0)*delta.get(1,0);
+    float z_angle = std::atan2(delta.get(1, 0), delta.get(0, 0)) - xEst.get(2, 0);
     
     Matrix zp; zp.rows=2; zp.cols=1;
     zp.at(0, 0) = std::sqrt(q);
@@ -203,15 +197,9 @@ void ekf_slam_top(
     data_t x_out[MAX_ROWS], int &x_rows_out,
     data_t P_out[MAX_ROWS*MAX_ROWS], int &P_rows_out
 ) {
-    #pragma HLS INTERFACE mode=m_axi port=x_in bundle=gmem0
-    #pragma HLS INTERFACE mode=m_axi port=P_in bundle=gmem1
-    #pragma HLS INTERFACE mode=m_axi port=u_in bundle=gmem0
-    #pragma HLS INTERFACE mode=m_axi port=z_in bundle=gmem0
-    #pragma HLS INTERFACE mode=m_axi port=x_out bundle=gmem0
-    #pragma HLS INTERFACE mode=m_axi port=P_out bundle=gmem1
-    #pragma HLS INTERFACE mode=s_axilite port=return
 
-    // 1. Reconstruction des objets Matrix locaux (copie depuis la mémoire)
+
+    // 1. Reconstruction des objets Matrix locaux (copie depuis la mÃ©moire)
     Matrix xEst; xEst.rows = x_rows; xEst.cols = 1;
     for(int i=0; i<MAX_ROWS; i++) xEst.data[i] = x_in[i];
 
@@ -236,7 +224,7 @@ void ekf_slam_top(
     set_block(xEst, 0, 0, xPred);
     
     // P = A*P*At + B*Q*Bt (Simplification: bloc robot seulement pour le moment, puis cross-cov)
-    // NOTE: Pour HLS, on fait une mise à jour complète de P en place
+    // NOTE: Pour HLS, on fait une mise Ã  jour complÃ¨te de P en place
     // Pxx Update
     Matrix Pxx; get_block(PEst, 0, 0, S, S, Pxx);
     Matrix At, Bt, AP, APA, BQ, BQB;
@@ -275,7 +263,7 @@ void ekf_slam_top(
 
     int nLM = calc_n_lm(xEst);
     int min_id = nLM;
-    double min_dist = M_DIST_TH;
+    float min_dist = M_DIST_TH;
 
     // Data Association
     loop_da: for (int i = 0; i < MAX_LANDMARKS; ++i) {
@@ -291,7 +279,7 @@ void ekf_slam_top(
                 mat_mul(S_inv, innov, Sinv_innov);
                 mat_mul(innov_t, Sinv_innov, dist_tmp);
                 
-                double dist = dist_tmp.get(0,0);
+                float dist = dist_tmp.get(0,0);
                 if (dist < min_dist) {
                     min_dist = dist;
                     min_id = i;
@@ -303,9 +291,9 @@ void ekf_slam_top(
     if (min_id == nLM && nLM < MAX_LANDMARKS) {
         // --- ADD NEW LANDMARK ---
         // Calc position
-        double r = z_i.get(0,0);
-        double angle = z_i.get(1,0);
-        double yaw = xEst.get(2,0);
+        float r = z_i.get(0,0);
+        float angle = z_i.get(1,0);
+        float yaw = xEst.get(2,0);
         
         // Extend State
         int old_rows = xEst.rows;
