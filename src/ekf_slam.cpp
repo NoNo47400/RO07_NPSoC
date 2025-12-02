@@ -122,6 +122,17 @@ public:
         }
         return res;
     }
+
+    void print() const {
+        std::cout << "[ ";
+        for (int r=0; r<rows; r++) {
+            for (int c=0; c<cols; c++) {
+                std::cout << (*this)(r,c) << ", ";
+            }
+            std::cout << std::endl;
+        }
+        std::cout << " ]" << std::endl;
+    }
 };
 
 Matrix operator*(double scalar, const Matrix& m) { return m * scalar; }
@@ -366,8 +377,13 @@ int main() {
     std::cout << "EKF SLAM C++ Library - Minimal Usage Example" << std::endl;
 
     // 1. Initialize State and Covariance
-    Matrix xEst(STATE_SIZE, 1); // Robot starts at [0,0,0]
-    Matrix PEst = Matrix::identity(STATE_SIZE);
+    double data[15] = {-5.62815962, 18.37374747, -2.54979418,-0.09302817, 4.97980269, 6.11371654, -6.91804677, 10.97515561,  1.16371694, 14.82922   , 10.21498871,  2.74484343, 15.0169684, -5.28442142, 19.95406455};
+    Matrix xEst(15, 1); // Robot starts at [0,0,0]
+    for (int i = 0; i < 15; ++i) {
+        printf("%lf\n", data[i]);
+        xEst(i, 0) = data[i];
+    }
+    Matrix PEst = Matrix::identity(15);
 
     // 2. Define Noise Covariances
     // Motion noise [velocity^2, yaw_rate^2]
@@ -396,6 +412,7 @@ int main() {
     xEst = result.first;
     PEst = result.second;
     auto us = std::chrono::duration_cast<std::chrono::microseconds>(t_final - t_start).count();
+    xEst.print();
     std::cout << "State after 1 step: [" << xEst(0,0) << ", " << xEst(1,0) << ", " << xEst(2,0) << "]" << std::endl;
     std::cout << "Landmarks in map: " << calc_n_lm(xEst) << std::endl;
     std::cout << "ekf_slam execution time: " << us << " us (" << (us / 1000.0) << " ms)" << std::endl;
