@@ -1,7 +1,7 @@
 #include <iostream>
 #include <vector>
 #include <iomanip>
-#include "ekf_slam.h"
+#include "../src/ekf_slam.h"
 
 // Helper pour afficher depuis le tableau plat
 void print_matrix(const char* name, data_t* data, int rows, int cols) {
