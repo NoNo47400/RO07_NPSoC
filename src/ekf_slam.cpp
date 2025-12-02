@@ -1,428 +1,378 @@
+#include "ekf_slam.h"
 
-#include <iostream>
-#include <vector>
-#include <cmath>
-#include <iomanip>
-#include <stdexcept>
-#include <utility>
-#include <chrono>   
+// --- Helper Functions ---
 
-// --- Constants ---
-const double DT = 0.1;           // time tick [s] (used in motion model)
-const double M_DIST_TH = 2.0;    // Threshold of Mahalanobis distance for data association
-const int STATE_SIZE = 3;        // State size [x,y,yaw]
-const int LM_SIZE = 2;           // LM state size [x,y]
-
-// --- Matrix Class ---
-class Matrix {
-public:
-    int rows;
-    int cols;
-    std::vector<double> data;
-
-    Matrix(int r, int c, double val = 0.0) : rows(r), cols(c), data(r * c, val) {}
-
-    static Matrix identity(int n) {
-        Matrix m(n, n);
-        for (int i = 0; i < n; ++i) m(i, i) = 1.0;
-        return m;
-    }
-
-    static Matrix diag(const std::vector<double>& vals) {
-        int n = vals.size();
-        Matrix m(n, n);
-        for (int i = 0; i < n; ++i) m(i, i) = vals[i];
-        return m;
-    }
-
-    double& operator()(int r, int c) {
-        if (r < 0 || r >= rows || c < 0 || c >= cols) throw std::out_of_range("Matrix index out of bounds");
-        return data[r * cols + c];
-    }
-
-    const double& operator()(int r, int c) const {
-        if (r < 0 || r >= rows || c < 0 || c >= cols) throw std::out_of_range("Matrix index out of bounds");
-        return data[r * cols + c];
-    }
-
-    Matrix operator+(const Matrix& other) const {
-        if (rows != other.rows || cols != other.cols) throw std::invalid_argument("Matrix dimension mismatch (+)");
-        Matrix res(rows, cols);
-        for (size_t i = 0; i < data.size(); ++i) res.data[i] = data[i] + other.data[i];
-        return res;
-    }
-
-    Matrix operator-(const Matrix& other) const {
-        if (rows != other.rows || cols != other.cols) throw std::invalid_argument("Matrix dimension mismatch (-)");
-        Matrix res(rows, cols);
-        for (size_t i = 0; i < data.size(); ++i) res.data[i] = data[i] - other.data[i];
-        return res;
-    }
-
-    Matrix operator*(const Matrix& other) const {
-        if (cols != other.rows) throw std::invalid_argument("Matrix dimension mismatch (*)");
-        Matrix res(rows, other.cols);
-        for (int i = 0; i < rows; ++i) {
-            for (int j = 0; j < other.cols; ++j) {
-                double sum = 0.0;
-                for (int k = 0; k < cols; ++k) {
-                    sum += (*this)(i, k) * other(k, j);
-                }
-                res(i, j) = sum;
-            }
-        }
-        return res;
-    }
-
-    Matrix operator*(double scalar) const {
-        Matrix res = *this;
-        for (double& v : res.data) v *= scalar;
-        return res;
-    }
-
-    Matrix transpose() const {
-        Matrix res(cols, rows);
-        for (int i = 0; i < rows; ++i) {
-            for (int j = 0; j < cols; ++j) {
-                res(j, i) = (*this)(i, j);
-            }
-        }
-        return res;
-    }
-
-    // Hardcoded inverse for 2x2 matrices (Sufficient for this SLAM)
-    Matrix inv2x2() const {
-        if (rows != 2 || cols != 2) throw std::runtime_error("Only 2x2 inversion implemented");
-        double det = (*this)(0, 0) * (*this)(1, 1) - (*this)(0, 1) * (*this)(1, 0);
-        if (std::abs(det) < 1e-9) throw std::runtime_error("Matrix is singular");
-        Matrix res(2, 2);
-        res(0, 0) = (*this)(1, 1) / det;
-        res(0, 1) = -(*this)(0, 1) / det;
-        res(1, 0) = -(*this)(1, 0) / det;
-        res(1, 1) = (*this)(0, 0) / det;
-        return res;
-    }
-    
-    // Copy a submatrix into this matrix at (r,c)
-    void set_block(int r, int c, const Matrix& other) {
-        for(int i=0; i<other.rows; ++i) {
-            for(int j=0; j<other.cols; ++j) {
-                (*this)(r+i, c+j) = other(i,j);
-            }
-        }
-    }
-
-    // Get a submatrix
-    Matrix get_block(int r, int c, int r_len, int c_len) const {
-        Matrix res(r_len, c_len);
-        for(int i=0; i<r_len; ++i) {
-            for(int j=0; j<c_len; ++j) {
-                res(i,j) = (*this)(r+i, c+j);
-            }
-        }
-        return res;
-    }
-
-    void print() const {
-        std::cout << "[ ";
-        for (int r=0; r<rows; r++) {
-            for (int c=0; c<cols; c++) {
-                std::cout << (*this)(r,c) << ", ";
-            }
-            std::cout << std::endl;
-        }
-        std::cout << " ]" << std::endl;
-    }
-};
-
-Matrix operator*(double scalar, const Matrix& m) { return m * scalar; }
-
-// --- Helpers ---
-
-double pi_2_pi(double angle) {
+// Normalisation d'angle
+float pi_2_pi(float angle) {
     while (angle >= M_PI) angle -= 2.0 * M_PI;
     while (angle < -M_PI) angle += 2.0 * M_PI;
     return angle;
 }
 
+// OpÃ©rations Matricielles Basiques optimisÃ©es pour HLS
+void mat_add(const Matrix &A, const Matrix &B, Matrix &C) {
+    C.rows = A.rows; C.cols = A.cols;
+    loop_add: for (int i = 0; i < MAX_ROWS; i++) {
+        if (i < A.rows * A.cols) // Bound check logique
+             C.data[i] = A.data[i] + B.data[i];
+    }
+}
+
+void mat_sub(const Matrix &A, const Matrix &B, Matrix &C) {
+    C.rows = A.rows; C.cols = A.cols;
+    loop_sub: for (int i = 0; i < MAX_ROWS; i++) {
+        if (i < A.rows * A.cols)
+            C.data[i] = A.data[i] - B.data[i];
+    }
+}
+
+void mat_mul(const Matrix &A, const Matrix &B, Matrix &C) {
+    C.rows = A.rows; C.cols = B.cols;
+    loop_mul_row: for (int i = 0; i < MAX_ROWS; ++i) {
+        loop_mul_col: for (int j = 0; j < MAX_ROWS; ++j) {
+            if (i < A.rows && j < B.cols) {
+                data_t sum = 0;
+                loop_mul_inner: for (int k = 0; k < MAX_ROWS; ++k) {
+                    if (k < A.cols)
+                        sum += A.get(i, k) * B.get(k, j);
+                }
+                C.at(i, j) = sum;
+            }
+        }
+    }
+}
+
+void mat_transpose(const Matrix &A, Matrix &C) {
+    C.rows = A.cols; C.cols = A.rows;
+    loop_trans_row: for(int i=0; i<MAX_ROWS; i++) {
+        loop_trans_col: for(int j=0; j<MAX_ROWS; j++) {
+            if(i < A.rows && j < A.cols)
+                C.at(j,i) = A.get(i,j);
+        }
+    }
+}
+
+// Inversion 2x2 optimisÃ©e (HardcodÃ©e pour Ã©viter la dÃ©composition LU gÃ©nÃ©rique)
+bool mat_inv2x2(const Matrix &A, Matrix &C) {
+    data_t det = A.get(0,0)*A.get(1,1) - A.get(0,1)*A.get(1,0);
+    if (std::abs(det) < 1e-6) return false;
+    data_t invDet = 1.0 / det;
+    C.rows = 2; C.cols = 2;
+    C.at(0,0) =  A.get(1,1) * invDet;
+    C.at(0,1) = -A.get(0,1) * invDet;
+    C.at(1,0) = -A.get(1,0) * invDet;
+    C.at(1,1) =  A.get(0,0) * invDet;
+    return true;
+}
+
+// Extraction et insertion de blocs
+void get_block(const Matrix &src, int r, int c, int r_len, int c_len, Matrix &dst) {
+    dst.rows = r_len; dst.cols = c_len;
+    for(int i=0; i<MAX_ROWS; i++) {
+        for(int j=0; j<MAX_ROWS; j++) {
+            if(i < r_len && j < c_len)
+                dst.at(i,j) = src.get(r+i, c+j);
+        }
+    }
+}
+
+void set_block(Matrix &dst, int r, int c, const Matrix &src) {
+    for(int i=0; i<MAX_ROWS; i++) {
+        for(int j=0; j<MAX_ROWS; j++) {
+            if(i < src.rows && j < src.cols)
+                dst.at(r+i, c+j) = src.get(i,j);
+        }
+    }
+}
+
+// --- EKF Logic Helpers ---
+
 int calc_n_lm(const Matrix& x) {
     return (x.rows - STATE_SIZE) / LM_SIZE;
 }
 
-// --- Motion Model ---
-
-Matrix motion_model(const Matrix& x, const Matrix& u) {
-    Matrix xp = x; // Copy state
-    double yaw = x(2, 0);
-    
-    xp(0, 0) += u(0, 0) * DT * cos(yaw);
-    xp(1, 0) += u(0, 0) * DT * sin(yaw);
-    xp(2, 0) += u(1, 0) * DT;
-    xp(2, 0) = pi_2_pi(xp(2, 0));
-    
-    return xp;
+void motion_model(const Matrix& x, const Matrix& u, Matrix &x_pred) {
+    x_pred = x; // Copie
+    float yaw = x.get(2, 0);
+    x_pred.at(0, 0) += u.get(0, 0) * DT * std::cos(yaw);
+    x_pred.at(1, 0) += u.get(0, 0) * DT * std::sin(yaw);
+    x_pred.at(2, 0) += u.get(1, 0) * DT;
+    x_pred.at(2, 0) = pi_2_pi(x_pred.get(2, 0));
 }
 
-// Returns {A, B}
-std::pair<Matrix, Matrix> jacob_motion(const Matrix& x, const Matrix& u) {
-    Matrix A = Matrix::identity(3);
-    double yaw = x(2, 0);
-    double v = u(0, 0);
+void jacob_motion(const Matrix& x, const Matrix& u, Matrix &A, Matrix &B) {
+    Matrix::identity(3, A);
+    float yaw = x.get(2, 0);
+    float v = u.get(0, 0);
     
-    A(0, 2) = -DT * v * sin(yaw);
-    A(1, 2) = DT * v * cos(yaw);
+    A.at(0, 2) = -DT * v * std::sin(yaw);
+    A.at(1, 2) = DT * v * std::cos(yaw);
     
-    Matrix B(3, 2);
-    B(0, 0) = DT * cos(yaw);
-    B(1, 0) = DT * sin(yaw);
-    B(2, 1) = DT;
+    B.rows = 3; B.cols = 2;
+    // Reset B data
+    for(int i=0; i<6; i++) B.data[i] = 0; 
     
-    return {A, B};
+    B.at(0, 0) = DT * std::cos(yaw);
+    B.at(1, 0) = DT * std::sin(yaw);
+    B.at(2, 1) = DT;
 }
 
-// --- Observation Model ---
-
-Matrix calc_landmark_position(const Matrix& x, const Matrix& z) {
-    Matrix zp(2, 1);
-    double range = z(0, 0);
-    double angle = z(1, 0);
-    double yaw = x(2, 0);
+void jacob_h(float q, const Matrix& delta, const Matrix& x, int i, Matrix &H) {
+    float sq = std::sqrt(q);
     
-    zp(0, 0) = x(0, 0) + range * cos(yaw + angle);
-    zp(1, 0) = x(1, 0) + range * sin(yaw + angle);
-    return zp;
-}
-
-Matrix get_landmark_position_from_state(const Matrix& x, int ind) {
-    int start = STATE_SIZE + LM_SIZE * ind;
-    return x.get_block(start, 0, LM_SIZE, 1);
-}
-
-Matrix jacob_h(double q, const Matrix& delta, const Matrix& x, int i) {
-    double sq = sqrt(q);
-    Matrix G(2, 5);
-    G(0, 0) = -sq * delta(0, 0); G(0, 1) = -sq * delta(1, 0); G(0, 2) = 0; G(0, 3) = sq * delta(0, 0); G(0, 4) = sq * delta(1, 0);
-    G(1, 0) = delta(1, 0);       G(1, 1) = -delta(0, 0);      G(1, 2) = -q; G(1, 3) = -delta(1, 0);     G(1, 4) = delta(0, 0);
-    
-    G = G * (1.0 / q);
+    // G (2x5) local Jacobian
+    data_t G_data[10];
+    G_data[0] = -sq * delta.get(0,0); G_data[1] = -sq * delta.get(1,0); G_data[2] = 0; G_data[3] = sq * delta.get(0,0); G_data[4] = sq * delta.get(1,0);
+    G_data[5] = delta.get(1,0);       G_data[6] = -delta.get(0,0);      G_data[7] = -q; G_data[8] = -delta.get(1,0);    G_data[9] = delta.get(0,0);
     
     int nLM = calc_n_lm(x);
-    Matrix F(5, 3 + 2 * nLM); // Construct big F matrix
+    // H (2 x Total_States)
+    H.rows = 2; H.cols = 3 + 2 * nLM;
     
-    // F is mostly sparse. 
-    // Top 3 rows are Identity for robot state
-    F(0, 0) = 1; F(1, 1) = 1; F(2, 2) = 1;
-    // Bottom 2 rows pick the specific landmark
-    int lm_idx_start = 3 + 2 * i;
-    F(3, lm_idx_start) = 1;
-    F(4, lm_idx_start + 1) = 1;
+    // Construction directe de H = G * F sans crÃ©er la matrice immense F (sparse)
+    // Indexes: Robot (0,1,2), Landmark (3+2*i, 3+2*i+1)
     
-    return G * F;
+    // Reset H
+    for(int k=0; k<MAX_ROWS*2; k++) H.data[k] = 0.0;
+
+    float inv_q = 1.0 / q;
+
+    // Remplissage partie Robot (colonnes 0,1,2)
+    // G * I(3) -> Les 3 premiÃ¨res colonnes de G divisÃ©es par q
+    H.at(0,0) = G_data[0] * inv_q; H.at(0,1) = G_data[1] * inv_q; H.at(0,2) = G_data[2] * inv_q;
+    H.at(1,0) = G_data[5] * inv_q; H.at(1,1) = G_data[6] * inv_q; H.at(1,2) = G_data[7] * inv_q;
+
+    // Remplissage partie Landmark (colonnes correspondant Ã  l'ID i)
+    int lm_idx = 3 + 2 * i;
+    // G * Bloc(1,0; 0,1) aux indices
+    H.at(0, lm_idx)   = G_data[3] * inv_q; H.at(0, lm_idx+1) = G_data[4] * inv_q;
+    H.at(1, lm_idx)   = G_data[8] * inv_q; H.at(1, lm_idx+1) = G_data[9] * inv_q;
 }
 
-std::pair<Matrix, Matrix> jacob_augment(const Matrix& x, const Matrix& z) {
-    double r = z(0, 0);
-    double angle = z(1, 0);
-    double yaw = x(2, 0);
+// Calcul de l'innovation et des matrices associÃ©es
+// Retourne innov, S, H par rÃ©fÃ©rence
+void calc_innovation(const Matrix& xEst, const Matrix& PEst, const Matrix& z_meas, int lm_id, const Matrix& R,
+                     Matrix &innov, Matrix &S, Matrix &H) 
+{
+    // Extraction Landmark state
+    int start = STATE_SIZE + LM_SIZE * lm_id;
+    Matrix lm_pos; 
+    get_block(xEst, start, 0, LM_SIZE, 1, lm_pos);
     
-    Matrix Jr(2, 3);
-    Jr(0, 0) = 1; Jr(0, 2) = -r * sin(yaw + angle);
-    Jr(1, 1) = 1; Jr(1, 2) = r * cos(yaw + angle);
+    Matrix robot_pos;
+    get_block(xEst, 0, 0, 2, 1, robot_pos);
     
-    Matrix Jz(2, 2);
-    Jz(0, 0) = cos(yaw + angle); Jz(0, 1) = -r * sin(yaw + angle);
-    Jz(1, 0) = sin(yaw + angle); Jz(1, 1) = r * cos(yaw + angle);
+    Matrix delta;
+    mat_sub(lm_pos, robot_pos, delta);
     
-    return {Jr, Jz};
+    float q = delta.get(0,0)*delta.get(0,0) + delta.get(1,0)*delta.get(1,0);
+    float z_angle = std::atan2(delta.get(1, 0), delta.get(0, 0)) - xEst.get(2, 0);
+    
+    Matrix zp; zp.rows=2; zp.cols=1;
+    zp.at(0, 0) = std::sqrt(q);
+    zp.at(1, 0) = pi_2_pi(z_angle);
+    
+    mat_sub(z_meas, zp, innov);
+    innov.at(1, 0) = pi_2_pi(innov.get(1, 0));
+    
+    jacob_h(q, delta, xEst, lm_id, H);
+    
+    // S = H * P * Ht + R
+    Matrix Ht, HP, HPHt;
+    mat_transpose(H, Ht);
+    mat_mul(H, PEst, HP);
+    mat_mul(HP, Ht, HPHt);
+    mat_add(HPHt, R, S);
 }
 
-// --- EKF Core ---
+// --- TOP LEVEL FUNCTION ---
 
-struct InnovationResult {
-    Matrix innov;
-    Matrix S;
-    Matrix H;
-};
+void ekf_slam_top(
+    data_t x_in[MAX_ROWS], int x_rows,
+    data_t P_in[MAX_ROWS*MAX_ROWS], int P_rows,
+    data_t u_in[2],
+    data_t z_in[3], 
+    data_t Q_in[2], 
+    data_t R_in[2],
+    data_t x_out[MAX_ROWS], int &x_rows_out,
+    data_t P_out[MAX_ROWS*MAX_ROWS], int &P_rows_out
+) {
 
-InnovationResult calc_innovation(const Matrix& xEst, const Matrix& PEst, const Matrix& z, int lm_id, const Matrix& R) {
-    Matrix lm = get_landmark_position_from_state(xEst, lm_id);
-    Matrix delta = lm - xEst.get_block(0, 0, 2, 1);
-    double q = (delta.transpose() * delta)(0, 0);
-    double z_angle = atan2(delta(1, 0), delta(0, 0)) - xEst(2, 0);
-    
-    Matrix zp(2, 1);
-    zp(0, 0) = sqrt(q);
-    zp(1, 0) = pi_2_pi(z_angle);
-    
-    Matrix z_meas = z.get_block(0, 0, 2, 1);
-    Matrix innov = z_meas - zp;
-    innov(1, 0) = pi_2_pi(innov(1, 0));
-    
-    Matrix H = jacob_h(q, delta, xEst, lm_id);
-    Matrix S = H * PEst * H.transpose() + R;
-    
-    return {innov, S, H};
-}
 
-int search_correspond_landmark_id(const Matrix& xEst, const Matrix& PEst, const Matrix& z_meas, const Matrix& R) {
+    // 1. Reconstruction des objets Matrix locaux (copie depuis la mÃ©moire)
+    Matrix xEst; xEst.rows = x_rows; xEst.cols = 1;
+    for(int i=0; i<MAX_ROWS; i++) xEst.data[i] = x_in[i];
+
+    Matrix PEst; PEst.rows = P_rows; PEst.cols = P_rows;
+    for(int i=0; i<MAX_ROWS*MAX_ROWS; i++) PEst.data[i] = P_in[i];
+
+    Matrix u; u.rows = 2; u.cols = 1; u.at(0,0) = u_in[0]; u.at(1,0) = u_in[1];
+    
+    // Matrices de bruit (diagonales)
+    Matrix Q; Q.rows=2; Q.cols=2; Q.at(0,0)=Q_in[0]; Q.at(1,1)=Q_in[1]; Q.at(0,1)=0; Q.at(1,0)=0;
+    Matrix R; R.rows=2; R.cols=2; R.at(0,0)=R_in[0]; R.at(1,1)=R_in[1]; R.at(0,1)=0; R.at(1,0)=0;
+    
+    // --- PREDICTION ---
+    int S = 3; // Robot state size
+    Matrix x_robot; get_block(xEst, 0, 0, S, 1, x_robot);
+    
+    Matrix A, B;
+    jacob_motion(x_robot, u, A, B);
+    
+    Matrix xPred;
+    motion_model(x_robot, u, xPred);
+    set_block(xEst, 0, 0, xPred);
+    
+    // P = A*P*At + B*Q*Bt (Simplification: bloc robot seulement pour le moment, puis cross-cov)
+    // NOTE: Pour HLS, on fait une mise Ã  jour complÃ¨te de P en place
+    // Pxx Update
+    Matrix Pxx; get_block(PEst, 0, 0, S, S, Pxx);
+    Matrix At, Bt, AP, APA, BQ, BQB;
+    mat_transpose(A, At);
+    mat_transpose(B, Bt);
+    
+    mat_mul(A, Pxx, AP);
+    mat_mul(AP, At, APA);
+    
+    mat_mul(B, Q, BQ);
+    mat_mul(BQ, Bt, BQB);
+    
+    Matrix Pxx_new;
+    mat_add(APA, BQB, Pxx_new);
+    set_block(PEst, 0, 0, Pxx_new);
+    
+    // Cross covariance update if landmarks exist
+    if (PEst.rows > S) {
+        Matrix Pxm; 
+        get_block(PEst, 0, S, S, PEst.cols - S, Pxm);
+        Matrix Pxm_new;
+        mat_mul(A, Pxm, Pxm_new);
+        set_block(PEst, 0, S, Pxm_new);
+        
+        Matrix Pxm_new_t;
+        mat_transpose(Pxm_new, Pxm_new_t);
+        set_block(PEst, S, 0, Pxm_new_t);
+    }
+    
+    xEst.at(2, 0) = pi_2_pi(xEst.get(2, 0));
+
+    // --- UPDATE ---
+    Matrix z_i; z_i.rows=2; z_i.cols=1; // [range, angle]
+    z_i.at(0,0) = z_in[0];
+    z_i.at(1,0) = z_in[1];
+
     int nLM = calc_n_lm(xEst);
     int min_id = nLM;
-    double min_dist = M_DIST_TH;
-    
-    for (int i = 0; i < nLM; ++i) {
-        InnovationResult res = calc_innovation(xEst, PEst, z_meas, i, R);
-        Matrix dist_mat = res.innov.transpose() * res.S.inv2x2() * res.innov;
-        double dist = dist_mat(0, 0);
-        
-        if (dist < min_dist) {
-            min_dist = dist;
-            min_id = i;
+    float min_dist = M_DIST_TH;
+
+    // Data Association
+    loop_da: for (int i = 0; i < MAX_LANDMARKS; ++i) {
+        if (i < nLM) {
+            Matrix innov, S_mat, H;
+            calc_innovation(xEst, PEst, z_i, i, R, innov, S_mat, H);
+            
+            Matrix S_inv;
+            if (mat_inv2x2(S_mat, S_inv)) {
+                Matrix innov_t, dist_tmp;
+                mat_transpose(innov, innov_t);
+                Matrix Sinv_innov;
+                mat_mul(S_inv, innov, Sinv_innov);
+                mat_mul(innov_t, Sinv_innov, dist_tmp);
+                
+                float dist = dist_tmp.get(0,0);
+                if (dist < min_dist) {
+                    min_dist = dist;
+                    min_id = i;
+                }
+            }
         }
     }
-    return min_id;
-}
 
-/**
- * Main EKF SLAM Cycle
- * @param xEst Current State Vector [x, y, yaw, lm1_x, lm1_y, ...]
- * @param PEst Current Covariance Matrix
- * @param u Control input [v, yaw_rate]
- * @param z Observations matrix [range, angle, id] (id is ignored in unknown data association)
- * @param Q Motion Noise Covariance
- * @param R Measurement Noise Covariance
- * @return Pair of {Updated State, Updated Covariance}
- */
-std::pair<Matrix, Matrix> ekf_slam(Matrix xEst, Matrix PEst, const Matrix& u, const Matrix& z, const Matrix& Q, const Matrix& R) {
-    
-    // 1. Predict
-    int S = STATE_SIZE;
-    auto motion_jac = jacob_motion(xEst.get_block(0, 0, S, 1), u);
-    Matrix A = motion_jac.first;
-    Matrix B = motion_jac.second;
-    
-    // xEst[0:3] = motion_model(...)
-    Matrix xPred = motion_model(xEst.get_block(0, 0, S, 1), u);
-    xEst.set_block(0, 0, xPred);
-    
-    // PEst[0:3, 0:3] = A*P*At + B*Q*Bt
-    Matrix Pxx = PEst.get_block(0, 0, S, S);
-    Matrix P_new_xx = A * Pxx * A.transpose() + B * Q * B.transpose();
-    PEst.set_block(0, 0, P_new_xx);
-    
-    // Handle cross-covariances if landmarks exist
-    if (PEst.rows > S) {
-        Matrix Pxm = PEst.get_block(0, S, S, PEst.cols - S);
-        Matrix P_new_xm = A * Pxm;
-        PEst.set_block(0, S, P_new_xm);
-        PEst.set_block(S, 0, P_new_xm.transpose());
-    }
-    
-    xEst(2, 0) = pi_2_pi(xEst(2, 0));
-    
-    // 2. Update
-    for (int i = 0; i < z.rows; ++i) {
-        Matrix z_i = z.get_block(i, 0, 1, 3).transpose(); // [range, angle, id]
+    if (min_id == nLM && nLM < MAX_LANDMARKS) {
+        // --- ADD NEW LANDMARK ---
+        // Calc position
+        float r = z_i.get(0,0);
+        float angle = z_i.get(1,0);
+        float yaw = xEst.get(2,0);
         
-        int min_id = search_correspond_landmark_id(xEst, PEst, z_i, R);
-        int nLM = calc_n_lm(xEst);
+        // Extend State
+        int old_rows = xEst.rows;
+        xEst.rows += 2; 
+        xEst.at(old_rows, 0)   = xEst.get(0,0) + r * std::cos(yaw + angle);
+        xEst.at(old_rows+1, 0) = xEst.get(1,0) + r * std::sin(yaw + angle);
+
+        // Extend Covariance
+        // Jr, Jz calculation
+        Matrix Jr; Jr.rows=2; Jr.cols=3;
+        Jr.at(0,0)=1; Jr.at(0,1)=0; Jr.at(0,2)=-r*std::sin(yaw+angle);
+        Jr.at(1,0)=0; Jr.at(1,1)=1; Jr.at(1,2)= r*std::cos(yaw+angle);
         
-        if (min_id == nLM) {
-            // New Landmark found - Extend State
-            Matrix lm_pos = calc_landmark_position(xEst, z_i);
-            Matrix xNew(xEst.rows + 2, 1);
-            xNew.set_block(0, 0, xEst);
-            xNew.set_block(xEst.rows, 0, lm_pos);
-            xEst = xNew;
-            
-            // Expand covariance
-            auto aug_jac = jacob_augment(xEst.get_block(0, 0, 3, 1), z_i);
-            Matrix Jr = aug_jac.first;
-            Matrix Jz = aug_jac.second;
-            
-            // Reconstruct PEst with new size
-            int old_size = PEst.rows;
-            Matrix PNew(old_size + 2, old_size + 2);
-            PNew.set_block(0, 0, PEst);
-            
-            // Calculate new blocks
-            // P[new_lm, map] = Jr * P[robot, map]
-            Matrix P_robot_map = PEst.get_block(0, 0, 3, old_size);
-            Matrix P_new_lm_map = Jr * P_robot_map;
-            PNew.set_block(old_size, 0, P_new_lm_map);
-            PNew.set_block(0, old_size, P_new_lm_map.transpose());
-            
-            // P[new_lm, new_lm]
-            Matrix P_robot = PEst.get_block(0, 0, 3, 3);
-            Matrix P_lm_lm = Jr * P_robot * Jr.transpose() + Jz * R * Jz.transpose();
-            PNew.set_block(old_size, old_size, P_lm_lm);
-            
-            PEst = PNew;
-        } else {
-            // Update existing landmark
-            auto innov_res = calc_innovation(xEst, PEst, z_i, min_id, R);
-            Matrix K = PEst * innov_res.H.transpose() * innov_res.S.inv2x2();
-            xEst = xEst + K * innov_res.innov;
-            
-            Matrix I = Matrix::identity(PEst.rows);
-            PEst = (I - K * innov_res.H) * PEst;
-        }
+        Matrix Jz; Jz.rows=2; Jz.cols=2;
+        Jz.at(0,0)=std::cos(yaw+angle); Jz.at(0,1)=-r*std::sin(yaw+angle);
+        Jz.at(1,0)=std::sin(yaw+angle); Jz.at(1,1)= r*std::cos(yaw+angle);
+
+        // Resize P
+        PEst.rows += 2; PEst.cols += 2;
         
-        xEst(2, 0) = pi_2_pi(xEst(2, 0));
+        // P[new, map] = Jr * P[robot, map]
+        Matrix P_robot_map;
+        get_block(PEst, 0, 0, 3, old_rows, P_robot_map);
+        Matrix P_new_lm_map;
+        mat_mul(Jr, P_robot_map, P_new_lm_map);
+        
+        set_block(PEst, old_rows, 0, P_new_lm_map);
+        Matrix P_new_lm_map_t;
+        mat_transpose(P_new_lm_map, P_new_lm_map_t);
+        set_block(PEst, 0, old_rows, P_new_lm_map_t);
+        
+        // P[new, new]
+        Matrix P_robot; get_block(PEst, 0, 0, 3, 3, P_robot);
+        Matrix JrP, JrPJrt, JzR, JzRJzt, P_lmlm;
+        Matrix Jrt, Jzt;
+        mat_transpose(Jr, Jrt);
+        mat_transpose(Jz, Jzt);
+        
+        mat_mul(Jr, P_robot, JrP);
+        mat_mul(JrP, Jrt, JrPJrt);
+        mat_mul(Jz, R, JzR);
+        mat_mul(JzR, Jzt, JzRJzt);
+        mat_add(JrPJrt, JzRJzt, P_lmlm);
+        
+        set_block(PEst, old_rows, old_rows, P_lmlm);
+
+    } else if (min_id < nLM) {
+        // --- UPDATE EXISTING ---
+        Matrix innov, S_mat, H;
+        calc_innovation(xEst, PEst, z_i, min_id, R, innov, S_mat, H);
+        
+        Matrix S_inv;
+        mat_inv2x2(S_mat, S_inv); // Assume invertible
+        
+        Matrix Ht, PHt, K;
+        mat_transpose(H, Ht);
+        mat_mul(PEst, Ht, PHt);
+        mat_mul(PHt, S_inv, K); // Kalman Gain
+        
+        // x = x + K * innov
+        Matrix K_innov;
+        mat_mul(K, innov, K_innov);
+        mat_add(xEst, K_innov, xEst);
+        
+        // P = (I - KH) P
+        Matrix KH, I, I_KH, P_new;
+        Matrix::identity(PEst.rows, I);
+        mat_mul(K, H, KH);
+        mat_sub(I, KH, I_KH);
+        mat_mul(I_KH, PEst, P_new);
+        PEst = P_new;
     }
     
-    return {xEst, PEst};
-}
+    xEst.at(2, 0) = pi_2_pi(xEst.get(2, 0));
 
-int main() {
-    std::cout << "EKF SLAM C++ Library - Minimal Usage Example" << std::endl;
-
-    // 1. Initialize State and Covariance
-    double data[15] = {-5.62815962, 18.37374747, -2.54979418,-0.09302817, 4.97980269, 6.11371654, -6.91804677, 10.97515561,  1.16371694, 14.82922   , 10.21498871,  2.74484343, 15.0169684, -5.28442142, 19.95406455};
-    Matrix xEst(15, 1); // Robot starts at [0,0,0]
-    for (int i = 0; i < 15; ++i) {
-        printf("%lf\n", data[i]);
-        xEst(i, 0) = data[i];
-    }
-    Matrix PEst = Matrix::identity(15);
-
-    // 2. Define Noise Covariances
-    // Motion noise [velocity^2, yaw_rate^2]
-    Matrix Q = Matrix::diag({0.1, 0.1}); 
-    // Measurement noise [range^2, angle^2]
-    Matrix R = Matrix::diag({0.2*0.2, (5.0*M_PI/180.0)*(5.0*M_PI/180.0)});
-
-    // 3. Define Input and Observations (Dummy Data for example)
-    // Control: 1.0 m/s forward, 0.1 rad/s turn
-    Matrix u(2, 1);
-    u(0, 0) = 1.0; 
-    u(1, 0) = 0.1;
-
-    // Measurement: Range=10.0m, Angle=0.0rad (seen straight ahead)
-    Matrix z(1, 3); 
-    z(0, 0) = 10.0; // Range
-    z(0, 1) = 0.0;  // Angle
-    z(0, 2) = 0.0;  // ID (ignored by default implementation)
-
-    std::cout << "Initial State: [" << xEst(0,0) << ", " << xEst(1,0) << ", " << xEst(2,0) << "]" << std::endl;
-
-    // 4. Run one step of EKF SLAM  
-    auto t_start = std::chrono::high_resolution_clock::now();
-    auto result = ekf_slam(xEst, PEst, u, z, Q, R);
-    auto t_final = std::chrono::high_resolution_clock::now();
-    xEst = result.first;
-    PEst = result.second;
-    auto us = std::chrono::duration_cast<std::chrono::microseconds>(t_final - t_start).count();
-    xEst.print();
-    std::cout << "State after 1 step: [" << xEst(0,0) << ", " << xEst(1,0) << ", " << xEst(2,0) << "]" << std::endl;
-    std::cout << "Landmarks in map: " << calc_n_lm(xEst) << std::endl;
-    std::cout << "ekf_slam execution time: " << us << " us (" << (us / 1000.0) << " ms)" << std::endl;
-
+    // Write back outputs
+    x_rows_out = xEst.rows;
+    P_rows_out = PEst.rows;
     
-    // Verify a landmark was added at roughly x=10, y=0 (since robot was at 0,0 facing 0, seeing object 10m ahead)
-    if (calc_n_lm(xEst) > 0) {
-        Matrix lm1 = get_landmark_position_from_state(xEst, 0);
-        std::cout << "Landmark 1 Est: [" << lm1(0,0) << ", " << lm1(1,0) << "]" << std::endl;
-    }
-
-    return 0;
+    loop_out_x: for(int i=0; i<MAX_ROWS; i++) x_out[i] = xEst.data[i];
+    loop_out_p: for(int i=0; i<MAX_ROWS*MAX_ROWS; i++) P_out[i] = PEst.data[i];
 }
