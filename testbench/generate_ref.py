@@ -324,20 +324,24 @@ def main(Landmarks,Q_sim_factor=3, Py_sim_factor=1, Q_factor=2, Py_factor=2, kno
     #xEst = np.zeros((STATE_SIZE, 1))
     xEst = np.array([[-5.62815962],
             [18.37374747],
-            [-2.54979418],
-            [-0.09302817],
-            [ 4.97980269],
-            [ 6.11371654],
-            [-6.91804677],
-            [10.97515561],
-            [ 1.16371694],
-            [14.82922   ],
-            [10.21498871],
-            [ 2.74484343],
-            [15.0169684 ],
-            [-5.28442142],
-            [19.95406455]])
-    PEst = np.eye(15)
+            [-2.54979418]])
+    # xEst = np.array([[-5.62815962],
+    #         [18.37374747],
+    #         [-2.54979418],
+    #         [-0.09302817],
+    #         [ 4.97980269],
+    #         [ 6.11371654],
+    #         [-6.91804677],
+    #         [10.97515561],
+    #         [ 1.16371694],
+    #         [14.82922   ],
+    #         [10.21498871],
+    #         [ 2.74484343],
+    #         [15.0169684 ],
+    #         [-5.28442142],
+    #         [19.95406455]])
+    PEst = np.eye(3)
+    # PEst = np.eye(15)
 
     # Init true state for simulator
     xTrue = np.zeros((STATE_SIZE, 1))
@@ -349,9 +353,12 @@ def main(Landmarks,Q_sim_factor=3, Py_sim_factor=1, Q_factor=2, Py_factor=2, kno
     NB_STEPS = 10
     file = open("golden_ref.h", "w")
 
+    # hxEst = xEst
+
+
     # Simulate motion and generate u and y
     for _ in range(NB_STEPS):
-        file.write(get_c_array("xEst_IN", xEst))
+        file.write(get_c_array("xEst_IN", xEst) + ";\n")
 
 
         uTrue = calc_input(speed, radius)
@@ -360,16 +367,21 @@ def main(Landmarks,Q_sim_factor=3, Py_sim_factor=1, Q_factor=2, Py_factor=2, kno
         u = np.array([[
             1.0,
             0.1]]).T
+        # u = np.array([[]]).T
 
         y = np.array([[10.0,0.0,0.0]])
 
         xEst, PEst = ekf_slam(xEst, PEst, u, y, M_DIST_TH, KNOWN_DATA_ASSOCIATION, Q, Py)
+
+        # hxEst = np.hstack((hxEst, xEst))
         # file.write("xEst_OUT: " + str(xEst))
         # file.write("PEst_OUT: " + str(PEst))
-        file.write(get_c_array("xEst_OUT", xEst))
-        file.write(get_c_array("PEst_OUT", PEst))
+        file.write(get_c_array("xEst_OUT", xEst) + ";\n")
+        file.write(get_c_array("PEst_OUT", PEst) + ";\n")
         # print("xEst: ", xEst)
         # print("PEst: ", PEst)
+    
+    # file.write(get_c_array("hxEst", hxEst) + ";\n")
 
     file.close()
 
