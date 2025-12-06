@@ -3,29 +3,16 @@
 #include <iomanip>
 #include "../src/ekf_slam.h"
 
-// Helper pour afficher depuis le tableau plat
-void print_matrix(const char* name, data_t* data, int rows, int cols) {
-    std::cout << name << " (" << rows << "x" << cols << "):" << std::endl;
-    for(int i=0; i<rows; i++) {
-        std::cout << "  ";
-        for(int j=0; j<cols; j++) {
-            std::cout << std::fixed << std::setprecision(4) << data[i*MAX_COLS + j] << " ";
-        }
-        std::cout << std::endl;
-    }
-}
-
 int main() {
     std::cout << "--- EKF SLAM HLS Testbench ---" << std::endl;
 
-    // 1. Inputs Buffers
     data_t x_in[MAX_ROWS] = {0};
-    // Initial Robot State (-5.62...)
+    // Initial Robot State 
     float init_data[15] = {-5.62815962, 18.37374747, -2.54979418};
     for(int i=0; i<3; i++) x_in[i] = init_data[i];
     int x_rows = 3;
 
-    // P Init (Identity 3x3 effectively, but buffer is large)
+    // P Init to max size directly
     data_t P_in[MAX_ROWS*MAX_ROWS] = {0};
     for(int i=0; i<3; i++) P_in[i*MAX_COLS + i] = 1.0;
     int P_rows = 3;
@@ -46,9 +33,9 @@ int main() {
     int x_rows_out = 0;
     int P_rows_out = 0;
 
-    // 2. Call Top Level
+    // Call EKF SLAM function
     std::cout << "Running EKF Step..." << std::endl;
-    ekf_slam_top(
+    ekf_slam(
         x_in, x_rows,
         P_in, P_rows,
         u_in,
@@ -58,18 +45,16 @@ int main() {
         P_out, P_rows_out
     );
 
-    // 3. Verify
+    // Verify
     std::cout << "Done." << std::endl;
     std::cout << "New State Size: " << x_rows_out << std::endl;
+    // Access as flat vector (row-major)
+    std::cout << std::fixed << std::setprecision(4);
+    std::cout << "Robot State: [" << x_out[0] << ", " << x_out[1] << ", " << x_out[2] << "]" << std::endl;
     
-    // On s'attend Ã  ce que le robot ait bougÃ© et qu'un landmark ait Ã©tÃ© ajoutÃ© (Size passe de 3 Ã  5)
-    print_matrix("x_out", x_out, x_rows_out, 1);
-    
-    // Check Landmark pos
-    if (x_rows_out >= 5) {
-        float lm_x = x_out[3];
-        float lm_y = x_out[4];
-        std::cout << "Landmark detected at: [" << lm_x << ", " << lm_y << "]" << std::endl;
+    // If a landmark was added, size should augment by 2
+    if (x_rows_out > 3) {
+        std::cout << "Landmark: [" << x_out[3] << ", " << x_out[4] << "]" << std::endl;
     }
 
     return 0;

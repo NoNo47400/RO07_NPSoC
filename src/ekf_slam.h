@@ -5,14 +5,14 @@
 
 // --- HLS Constants ---
 #ifndef M_PI
-#define M_PI 3.14159265358979323846
+#define M_PI 3.14159265358979323846 // Same as in python file to have consistent results
 #endif
 
-// Configuration de la taille (Compromis Surface vs CapacitÃ©)
+// Defining sizes and limits
 #define MAX_LANDMARKS 5
 #define STATE_SIZE 3
 #define LM_SIZE 2
-// Taille maximale absolue des matrices (Robots + 5 Landmarks = 3 + 10 = 13)
+// Maximum absolute size of matrices (Robot + 5 Landmarks = 3 + 10 = 13)
 #define MAX_ROWS 13
 #define MAX_COLS 13
 
@@ -20,21 +20,19 @@
 const float DT = 0.1;           
 const float M_DIST_TH = 2.0;    
 
-typedef float data_t; // Peut être changé en float ou ap_fixed pour gagner de la surface
+typedef float data_t; // Changed in float to be in 32 bits and not 64 (double) which were to long for calculations
 
-// --- Classe Matrix SynthÃ©tisable ---
+// --- Matrix Class ---
 struct Matrix {
     int rows;
     int cols;
     data_t data[MAX_ROWS * MAX_COLS];
 
-    // Constructeurs
     Matrix() : rows(0), cols(0) {
 		#pragma HLS RESOURCE variable=data core=RAM_1P_BRAM
         for(int i=0; i<MAX_ROWS*MAX_COLS; i++) data[i] = 0.0;
     }
 
-    // AccÃ¨s (linÃ©arisation 2D -> 1D)
     data_t& at(int r, int c) {
         return data[r * MAX_COLS + c];
     }
@@ -43,7 +41,6 @@ struct Matrix {
         return data[r * MAX_COLS + c];
     }
 
-    // Initialisation IdentitÃ©
     static void identity(int n, Matrix &res) {
         res.rows = n; res.cols = n;
         for (int i = 0; i < n; i++) {
@@ -54,14 +51,13 @@ struct Matrix {
     }
 };
 
-// Prototypes des fonctions Kernel
-void ekf_slam_top(
+void ekf_slam(
     data_t x_in[MAX_ROWS], int x_rows,
     data_t P_in[MAX_ROWS*MAX_ROWS], int P_rows,
     data_t u_in[2],
-    data_t z_in[3], // Une seule observation pour cet exemple (extensible)
-    data_t Q_in[2], // Diagonale de Q
-    data_t R_in[2], // Diagonale de R
+    data_t z_in[3], // One observation at the time (range, bearing, id)
+    data_t Q_in[2], // Diagonal of Q
+    data_t R_in[2], // Diagonal of R
     data_t x_out[MAX_ROWS], int &x_rows_out,
     data_t P_out[MAX_ROWS*MAX_ROWS], int &P_rows_out
 );

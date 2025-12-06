@@ -1,0 +1,2 @@
+To compile the test bench    
+g++ -o ekf_slam_bin.exe .\testbench\ekf_slam_test.cpp .\src\ekf_slam.cpp -I .\src

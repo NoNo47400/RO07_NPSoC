@@ -1,32 +1,30 @@
 import math
 
+# Maybe they'll still have some difference in the results due to float vs double precision
+
 # --- HLS Constants ---
-M_PI = 3.14159265358979323846
+M_PI = 3.14159265358979323846 # Same as in Cpp file to have consistent results
 MAX_LANDMARKS = 5
 STATE_SIZE = 3
 LM_SIZE = 2
 MAX_ROWS = 13  # 3 + 2*5 = 13
-MAX_COLS = 13  # Carré pour simplifier l'adressage mémoire comme en HLS
+MAX_COLS = 13  
 
 # --- Algorithm Constants ---
 DT = 0.1
 M_DIST_TH = 2.0
 
-# --- Classe Matrix Synthétisable (Simulée) ---
+# --- Matrix class ---
 class Matrix:
     def __init__(self):
         self.rows = 0
         self.cols = 0
-        # Simulation du tableau statique C++ : data[MAX_ROWS * MAX_COLS]
-        # On initialise tout à 0.0 float
         self.data = [0.0] * (MAX_ROWS * MAX_COLS)
 
     def get(self, r, c):
-        # Accès lecture : data[r * MAX_COLS + c]
         return self.data[r * MAX_COLS + c]
 
     def set(self, r, c, val):
-        # Accès écriture
         self.data[r * MAX_COLS + c] = val
 
     @staticmethod
@@ -47,16 +45,13 @@ def pi_2_pi(angle):
         angle += 2.0 * M_PI
     return angle
 
-# --- Opérations Matricielles Basiques (Style HLS) ---
+# --- Basic Matrix Operations ---
 
 def mat_add(A, B, C):
     C.rows = A.rows
     C.cols = A.cols
-    # Boucle fixe comme en HLS
     for i in range(MAX_ROWS * MAX_COLS):
-        # Bound check logique simulant la boucle pipelinée
         if i < (A.rows * A.cols): 
-            # Comme A, B, C ont la même structure mémoire linéaire
             C.data[i] = A.data[i] + B.data[i]
 
 def mat_sub(A, B, C):
@@ -69,7 +64,6 @@ def mat_sub(A, B, C):
 def mat_mul(A, B, C):
     C.rows = A.rows
     C.cols = B.cols
-    # Triple boucle explicite
     for i in range(MAX_ROWS):
         for j in range(MAX_ROWS):
             if i < A.rows and j < B.cols:
@@ -88,7 +82,6 @@ def mat_transpose(A, C):
                 C.set(j, i, A.get(i, j))
 
 def mat_inv2x2(A, C):
-    # Inversion sans try/catch, retour booléen
     det = A.get(0,0) * A.get(1,1) - A.get(0,1) * A.get(1,0)
     if abs(det) < 1e-6:
         return False
@@ -122,7 +115,6 @@ def calc_n_lm(x):
     return int((x.rows - STATE_SIZE) / LM_SIZE)
 
 def motion_model(x, u, x_pred):
-    # Copie manuelle
     x_pred.rows = x.rows
     x_pred.cols = x.cols
     for i in range(MAX_ROWS * MAX_COLS):
@@ -152,7 +144,7 @@ def jacob_motion(x, u, A, B):
     
     B.rows = 3
     B.cols = 2
-    # Reset B data (only needed parts or full)
+    # Reset B data 
     for i in range(6): 
         B.data[i] = 0.0
         
@@ -181,17 +173,16 @@ def jacob_h(q, delta, x, i, H):
         
     inv_q = 1.0 / q
     
-    # Partie Robot
+    # Robot part
     H.set(0,0, G_data[0] * inv_q); H.set(0,1, G_data[1] * inv_q); H.set(0,2, G_data[2] * inv_q)
     H.set(1,0, G_data[5] * inv_q); H.set(1,1, G_data[6] * inv_q); H.set(1,2, G_data[7] * inv_q)
     
-    # Partie Landmark
+    # Landmark part
     lm_idx = 3 + 2 * i
     H.set(0, lm_idx,   G_data[3] * inv_q); H.set(0, lm_idx+1, G_data[4] * inv_q)
     H.set(1, lm_idx,   G_data[8] * inv_q); H.set(1, lm_idx+1, G_data[9] * inv_q)
 
 def calc_innovation(xEst, PEst, z_meas, lm_id, R, innov, S, H):
-    # Extraction Landmark state
     start = STATE_SIZE + LM_SIZE * lm_id
     lm_pos = Matrix()
     get_block(xEst, start, 0, LM_SIZE, 1, lm_pos)
@@ -227,50 +218,140 @@ def calc_innovation(xEst, PEst, z_meas, lm_id, R, innov, S, H):
     mat_mul(HP, Ht, HPHt)
     mat_add(HPHt, R, S)
 
-# --- TOP LEVEL FUNCTION ---
+# --- EKF Function ---
 
-def ekf_slam_top(x_in, x_rows, P_in, P_rows, u_in, z_in, Q_in, R_in):
-    # 1. Chargement CORRECT (Correction Stride)
+def ekf_slam(x_in, x_rows, P_in, P_rows, u_in, z_in, Q_in, R_in):
     xEst = Matrix()
     xEst.rows = x_rows; xEst.cols = 1
     for i in range(x_rows):
-        xEst.set(i, 0, x_in[i]) # Utiliser set() !
+        xEst.set(i, 0, x_in[i]) 
 
     PEst = Matrix()
     PEst.rows = P_rows; PEst.cols = P_rows
-    # P est une matrice dense stockée dans un buffer 13x13, c'est OK
+    # P is a matrix stored in a 13x13 buffer
     for i in range(MAX_ROWS * MAX_COLS):
         PEst.data[i] = P_in[i]
         
     u = Matrix(); u.rows = 2; u.cols = 1
     u.set(0,0, u_in[0]); u.set(1,0, u_in[1])
     
-    # ... (Q, R init) ...
-    # ... (Code PREDICTION identique) ...
+    # Q, R init (diagonales)
+    Q = Matrix(); Q.rows = 2; Q.cols = 2
+    Q.set(0,0, Q_in[0]); Q.set(1,1, Q_in[1]); Q.set(0,1, 0.0); Q.set(1,0, 0.0)
+    R = Matrix(); R.rows = 2; R.cols = 2
+    R.set(0,0, R_in[0]); R.set(1,1, R_in[1]); R.set(0,1, 0.0); R.set(1,0, 0.0)
     
-    # --- UPDATE ---
-    # Correction : Ignorer les mesures > 20.0m
-    if z_in[0] < 20.0:
-        z_i = Matrix()
-        z_i.rows = 2; z_i.cols = 1
-        z_i.set(0,0, z_in[0])
-        z_i.set(1,0, z_in[1])
-        
-        # ... (Tout le bloc de Data Association et Update) ...
-        # (Copiez-collez votre logique existante ici, mais indentée)
-        
+    # --- PREDICTION ---
+    S = 3
+    x_robot = Matrix(); get_block(xEst, 0, 0, S, 1, x_robot)
+    A = Matrix(); B = Matrix()
+    jacob_motion(x_robot, u, A, B)
+
+    xPred = Matrix()
+    motion_model(x_robot, u, xPred)
+    set_block(xEst, 0, 0, xPred)
+
+    Pxx = Matrix(); get_block(PEst, 0, 0, S, S, Pxx)
+    At = Matrix(); Bt = Matrix(); AP = Matrix(); APA = Matrix(); BQ = Matrix(); BQB = Matrix()
+    mat_transpose(A, At); mat_transpose(B, Bt)
+    mat_mul(A, Pxx, AP); mat_mul(AP, At, APA)
+    mat_mul(B, Q, BQ); mat_mul(BQ, Bt, BQB)
+
+    Pxx_new = Matrix(); mat_add(APA, BQB, Pxx_new)
+    set_block(PEst, 0, 0, Pxx_new)
+
+    if PEst.rows > S:
+        Pxm = Matrix(); get_block(PEst, 0, S, S, PEst.cols - S, Pxm)
+        Pxm_new = Matrix(); mat_mul(A, Pxm, Pxm_new)
+        set_block(PEst, 0, S, Pxm_new)
+
+        Pxm_new_t = Matrix(); mat_transpose(Pxm_new, Pxm_new_t)
+        set_block(PEst, S, 0, Pxm_new_t)
+
     xEst.set(2, 0, pi_2_pi(xEst.get(2, 0)))
     
-    # 3. Sauvegarde CORRECTE (pour le retour)
-    # On reconstruit la liste plate x_out à partir de la matrice stridée
+    # --- UPDATE ---
+    # Ignore high measurements to simplify and match real sensor behavior
+    if z_in[0] < 20.0:
+        z_i = Matrix(); z_i.rows = 2; z_i.cols = 1
+        z_i.set(0,0, z_in[0]); z_i.set(1,0, z_in[1])
+
+        nLM = calc_n_lm(xEst)
+        min_id = nLM
+        min_dist = M_DIST_TH
+
+        for i in range(MAX_LANDMARKS):
+            if i < nLM:
+                innov = Matrix(); S_mat = Matrix(); H = Matrix()
+                calc_innovation(xEst, PEst, z_i, i, R, innov, S_mat, H)
+                S_inv = Matrix()
+                if mat_inv2x2(S_mat, S_inv):
+                    innov_t = Matrix(); dist_tmp = Matrix(); Sinv_innov = Matrix()
+                    mat_transpose(innov, innov_t)
+                    mat_mul(S_inv, innov, Sinv_innov)
+                    mat_mul(innov_t, Sinv_innov, dist_tmp)
+                    dist = dist_tmp.get(0,0)
+                    if dist < min_dist:
+                        min_dist = dist
+                        min_id = i
+
+        # We are limiting the number of landmarks to MAX_LANDMARKS -> Maybe it would be better to overwrite the old ones
+        if min_id == nLM and nLM < MAX_LANDMARKS:
+            r = z_i.get(0,0)
+            angle = z_i.get(1,0)
+            yaw = xEst.get(2,0)
+
+            old_rows = xEst.rows
+            xEst.rows += 2
+            xEst.set(old_rows,   0, xEst.get(0,0) + r * math.cos(yaw + angle))
+            xEst.set(old_rows+1, 0, xEst.get(1,0) + r * math.sin(yaw + angle))
+
+            PEst.rows += 2; PEst.cols += 2
+
+            Jr = Matrix(); Jr.rows = 2; Jr.cols = 3
+            Jr.set(0,0,1); Jr.set(0,1,0); Jr.set(0,2,-r*math.sin(yaw+angle))
+            Jr.set(1,0,0); Jr.set(1,1,1); Jr.set(1,2, r*math.cos(yaw+angle))
+
+            Jz = Matrix(); Jz.rows = 2; Jz.cols = 2
+            Jz.set(0,0, math.cos(yaw+angle)); Jz.set(0,1, -r*math.sin(yaw+angle))
+            Jz.set(1,0, math.sin(yaw+angle)); Jz.set(1,1,  r*math.cos(yaw+angle))
+
+            P_robot_map = Matrix(); get_block(PEst, 0, 0, 3, old_rows, P_robot_map)
+            P_new_lm_map = Matrix(); mat_mul(Jr, P_robot_map, P_new_lm_map)
+            set_block(PEst, old_rows, 0, P_new_lm_map)
+            P_new_lm_map_t = Matrix(); mat_transpose(P_new_lm_map, P_new_lm_map_t)
+            set_block(PEst, 0, old_rows, P_new_lm_map_t)
+
+            P_robot = Matrix(); get_block(PEst, 0, 0, 3, 3, P_robot)
+            JrP = Matrix(); JrPJrt = Matrix(); JzR = Matrix(); JzRJzt = Matrix(); P_lmlm = Matrix()
+            Jrt = Matrix(); Jzt = Matrix()
+            mat_transpose(Jr, Jrt); mat_transpose(Jz, Jzt)
+            mat_mul(Jr, P_robot, JrP); mat_mul(JrP, Jrt, JrPJrt)
+            mat_mul(Jz, R, JzR); mat_mul(JzR, Jzt, JzRJzt)
+            mat_add(JrPJrt, JzRJzt, P_lmlm)
+            set_block(PEst, old_rows, old_rows, P_lmlm)
+
+        elif min_id < nLM:
+            innov = Matrix(); S_mat = Matrix(); H = Matrix()
+            calc_innovation(xEst, PEst, z_i, min_id, R, innov, S_mat, H)
+            S_inv = Matrix(); mat_inv2x2(S_mat, S_inv)
+            Ht = Matrix(); PHt = Matrix(); K = Matrix()
+            mat_transpose(H, Ht); mat_mul(PEst, Ht, PHt); mat_mul(PHt, S_inv, K)
+            K_innov = Matrix(); mat_mul(K, innov, K_innov)
+            mat_add(xEst, K_innov, xEst)
+            KH = Matrix(); I = Matrix(); I_KH = Matrix(); P_new = Matrix()
+            Matrix.identity(PEst.rows, I)
+            mat_mul(K, H, KH); mat_sub(I, KH, I_KH); mat_mul(I_KH, PEst, P_new)
+            PEst = P_new
+
+        xEst.set(2, 0, pi_2_pi(xEst.get(2, 0)))
+    
     x_out_list = [0.0] * MAX_ROWS
     for i in range(xEst.rows):
         x_out_list[i] = xEst.get(i, 0)
         
-    # On hack l'objet retourné pour qu'il ressemble à ce que attend le testbench
-    # Le testbench lit .rows et .data
     result_x = Matrix()
     result_x.rows = xEst.rows
-    result_x.data = x_out_list # On remplace data par la version compactée
+    result_x.data = x_out_list 
     
     return result_x, PEst

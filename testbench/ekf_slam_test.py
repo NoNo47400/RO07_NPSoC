@@ -1,8 +1,7 @@
-from src.ekf_slam import ekf_slam_top, MAX_ROWS, MAX_COLS
+from src.ekf_slam import ekf_slam, MAX_ROWS, MAX_COLS
 
-# --- TESTBENCH SIMPLIFIÉ ---
 if __name__ == "__main__":
-    # Buffers d'entrée (Arrays plats)
+    # Initial Robot State
     x_in = [0.0] * MAX_ROWS
     x_in[0] = -5.628
     x_in[1] = 18.373
@@ -22,10 +21,11 @@ if __name__ == "__main__":
     
     print("Running EKF Step (Python fixed-size)...")
     
-    x_res, P_res = ekf_slam_top(x_in, x_rows, P_in, P_rows, u_in, z_in, Q_in, R_in)
+    x_res, P_res = ekf_slam(x_in, x_rows, P_in, P_rows, u_in, z_in, Q_in, R_in)
     
     print(f"New State Size: {x_res.rows}")
-    print(f"Robot State: [{x_res.get(0,0):.4f}, {x_res.get(1,0):.4f}, {x_res.get(2,0):.4f}]")
-    
+    print(x_res.get(0,1))
+    print(f"Robot State: [{x_res.get(0,0):.4f}, {x_res.get(0,1):.4f}, {x_res.get(0,2):.4f}]")
+    # Print landmark if exists
     if x_res.rows > 3:
-        print(f"Landmark: [{x_res.get(3,0):.4f}, {x_res.get(4,0):.4f}]")
+        print(f"Landmark: [{x_res.get(0,3):.4f}, {x_res.get(0,4):.4f}]")

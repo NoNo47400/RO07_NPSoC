@@ -3,14 +3,14 @@
 
 // --- Helper Functions ---
 
-// Normalisation d'angle
+// Angle Normalization
 float pi_2_pi(float angle) {
     while (angle >= M_PI) angle -= 2.0 * M_PI;
     while (angle < -M_PI) angle += 2.0 * M_PI;
     return angle;
 }
 
-// OpÃ©rations Matricielles Basiques optimisÃ©es pour HLS
+// Functions for Matrix Operations without using dynamic memory -> To synthesize in HLS
 void mat_add(const Matrix &A, const Matrix &B, Matrix &C) {
     C.rows = A.rows; C.cols = A.cols;
     loop_add: for (int i = 0; i < MAX_ROWS; i++) {
@@ -53,7 +53,7 @@ void mat_transpose(const Matrix &A, Matrix &C) {
     }
 }
 
-// Inversion 2x2 optimisÃ©e (HardcodÃ©e pour Ã©viter la dÃ©composition LU gÃ©nÃ©rique)
+// Inversion 2x2
 bool mat_inv2x2(const Matrix &A, Matrix &C) {
     data_t det = A.get(0,0)*A.get(1,1) - A.get(0,1)*A.get(1,0);
     if (std::abs(det) < 1e-6) return false;
@@ -66,7 +66,6 @@ bool mat_inv2x2(const Matrix &A, Matrix &C) {
     return true;
 }
 
-// Extraction et insertion de blocs
 void get_block(const Matrix &src, int r, int c, int r_len, int c_len, Matrix &dst) {
     dst.rows = r_len; dst.cols = c_len;
     for(int i=0; i<MAX_ROWS; i++) {
@@ -93,7 +92,7 @@ int calc_n_lm(const Matrix& x) {
 }
 
 void motion_model(const Matrix& x, const Matrix& u, Matrix &x_pred) {
-    x_pred = x; // Copie
+    x_pred = x; // Copy
     float yaw = x.get(2, 0);
     x_pred.at(0, 0) += u.get(0, 0) * DT * std::cos(yaw);
     x_pred.at(1, 0) += u.get(0, 0) * DT * std::sin(yaw);
@@ -110,7 +109,7 @@ void jacob_motion(const Matrix& x, const Matrix& u, Matrix &A, Matrix &B) {
     A.at(1, 2) = DT * v * std::cos(yaw);
     
     B.rows = 3; B.cols = 2;
-    // Reset B data
+    // Reset B data to calculate new jacobian
     for(int i=0; i<6; i++) B.data[i] = 0; 
     
     B.at(0, 0) = DT * std::cos(yaw);
@@ -119,6 +118,7 @@ void jacob_motion(const Matrix& x, const Matrix& u, Matrix &A, Matrix &B) {
 }
 
 void jacob_h(float q, const Matrix& delta, const Matrix& x, int i, Matrix &H) {
+    // We are calculating H = G*F without building F (which is too large)
     float sq = std::sqrt(q);
     
     // G (2x5) local Jacobian
@@ -130,28 +130,24 @@ void jacob_h(float q, const Matrix& delta, const Matrix& x, int i, Matrix &H) {
     // H (2 x Total_States)
     H.rows = 2; H.cols = 3 + 2 * nLM;
     
-    // Construction directe de H = G * F sans crÃ©er la matrice immense F (sparse)
-    // Indexes: Robot (0,1,2), Landmark (3+2*i, 3+2*i+1)
-    
     // Reset H
     for(int k=0; k<MAX_ROWS*2; k++) H.data[k] = 0.0;
 
     float inv_q = 1.0 / q;
 
-    // Remplissage partie Robot (colonnes 0,1,2)
-    // G * I(3) -> Les 3 premiÃ¨res colonnes de G divisÃ©es par q
+    // Filling Robot part (columns 0,1,2)
+    // G * I(3) -> The first 3 columns of G divided by q
     H.at(0,0) = G_data[0] * inv_q; H.at(0,1) = G_data[1] * inv_q; H.at(0,2) = G_data[2] * inv_q;
     H.at(1,0) = G_data[5] * inv_q; H.at(1,1) = G_data[6] * inv_q; H.at(1,2) = G_data[7] * inv_q;
 
-    // Remplissage partie Landmark (colonnes correspondant Ã  l'ID i)
+    // Filling Landmark part (columns corresponding to ID i)
     int lm_idx = 3 + 2 * i;
-    // G * Bloc(1,0; 0,1) aux indices
+
     H.at(0, lm_idx)   = G_data[3] * inv_q; H.at(0, lm_idx+1) = G_data[4] * inv_q;
     H.at(1, lm_idx)   = G_data[8] * inv_q; H.at(1, lm_idx+1) = G_data[9] * inv_q;
 }
 
-// Calcul de l'innovation et des matrices associÃ©es
-// Retourne innov, S, H par rÃ©fÃ©rence
+// Calculation of innovation and associated matrices
 void calc_innovation(const Matrix& xEst, const Matrix& PEst, const Matrix& z_meas, int lm_id, const Matrix& R,
                      Matrix &innov, Matrix &S, Matrix &H) 
 {
@@ -186,9 +182,9 @@ void calc_innovation(const Matrix& xEst, const Matrix& PEst, const Matrix& z_mea
     mat_add(HPHt, R, S);
 }
 
-// --- TOP LEVEL FUNCTION ---
+// EKF SLAM Function
 
-void ekf_slam_top(
+void ekf_slam(
     data_t x_in[MAX_ROWS], int x_rows,
     data_t P_in[MAX_ROWS*MAX_ROWS], int P_rows,
     data_t u_in[2],
@@ -198,20 +194,19 @@ void ekf_slam_top(
     data_t x_out[MAX_ROWS], int &x_rows_out,
     data_t P_out[MAX_ROWS*MAX_ROWS], int &P_rows_out
 ) {
-    // 1. Chargement CORRECT des vecteurs (Gestion du stride)
     Matrix xEst; xEst.rows = x_rows; xEst.cols = 1;
-    for(int i=0; i<x_rows; i++) xEst.at(i, 0) = x_in[i]; // Utiliser .at() !
+    for(int i=0; i<x_rows; i++) xEst.at(i, 0) = x_in[i];
 
     Matrix PEst; PEst.rows = P_rows; PEst.cols = P_rows;
-    for(int i=0; i<MAX_ROWS*MAX_ROWS; i++) PEst.data[i] = P_in[i]; // P est déjà au bon format 13x13
+    for(int i=0; i<MAX_ROWS*MAX_ROWS; i++) PEst.data[i] = P_in[i]; // P is in 13x13 (explained in .h)
 
     Matrix u; u.rows = 2; u.cols = 1; 
-    u.at(0,0) = u_in[0]; u.at(1,0) = u_in[1]; // Utiliser .at()
+    u.at(0,0) = u_in[0]; u.at(1,0) = u_in[1]; 
     
     Matrix Q; Q.rows=2; Q.cols=2; Q.at(0,0)=Q_in[0]; Q.at(1,1)=Q_in[1]; Q.at(0,1)=0; Q.at(1,0)=0;
     Matrix R; R.rows=2; R.cols=2; R.at(0,0)=R_in[0]; R.at(1,1)=R_in[1]; R.at(0,1)=0; R.at(1,0)=0;
     
-    // --- PREDICTION (Toujours exécutée) ---
+    // --- PREDICTION ---
     int S = 3; 
     Matrix x_robot; get_block(xEst, 0, 0, S, 1, x_robot);
     
@@ -245,8 +240,8 @@ void ekf_slam_top(
     }
     xEst.at(2, 0) = pi_2_pi(xEst.get(2, 0));
 
-    // --- UPDATE (Conditionnelle) ---
-    // Correction 2: Ignorer les mesures aberrantes (> 20.0m)
+    // --- UPDATE ---
+    // Ignore high measurements to simplify and match real sensor behavior
     if (z_in[0] < 20.0) {
         Matrix z_i; z_i.rows=2; z_i.cols=1; 
         z_i.at(0,0) = z_in[0];
@@ -256,7 +251,6 @@ void ekf_slam_top(
         int min_id = nLM;
         float min_dist = M_DIST_TH;
 
-        // Data Association
         loop_da: for (int i = 0; i < MAX_LANDMARKS; ++i) {
             if (i < nLM) {
                 Matrix innov, S_mat, H;
@@ -276,6 +270,7 @@ void ekf_slam_top(
             }
         }
 
+        // We are limiting the number of landmarks to MAX_LANDMARKS -> Maybe it would be better to overwrite the old ones
         if (min_id == nLM && nLM < MAX_LANDMARKS) {
             printf("[CPP] NEW LANDMARK FOUND! ID=%d Range=%.2f\n", nLM, z_in[0]);
             float r = z_i.get(0,0);
@@ -328,15 +323,12 @@ void ekf_slam_top(
             PEst = P_new;
         }
         xEst.at(2, 0) = pi_2_pi(xEst.get(2, 0));
-    } // Fin condition z_in < 20.0
+    } 
 
-    // Write back outputs (Correction 3: Sauvegarde CORRECTE)
     x_rows_out = xEst.rows;
     P_rows_out = PEst.rows;
     
-    // On copie en utilisant .at() pour rassembler les données éparpillées
     for(int i=0; i<x_rows_out; i++) x_out[i] = xEst.at(i, 0); 
     
-    // P est déjà plat et aligné, on peut copier direct
     for(int i=0; i<MAX_ROWS*MAX_ROWS; i++) P_out[i] = PEst.data[i];
 }
