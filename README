@@ -1,2 +1,5 @@
 To compile the test bench    
 g++ -o ekf_slam_bin.exe .\testbench\ekf_slam_test.cpp .\src\ekf_slam.cpp -I .\src
+
+To compile the wrapper
+g++ -shared -fPIC -o libekf.so src/ekf_slam.cpp testbench/wrapper.cpp -I src
