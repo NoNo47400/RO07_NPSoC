@@ -281,7 +281,7 @@ def ekf_slam(xEst, PEst, u, y, M_DIST_TH, KNOWN_DATA_ASSOCIATION, Q, Py):
     return xEst, PEst
 
 
-def get_c_array(name: str, arr: np.array):
+def get_c_array(name: str, arr: np.array, c_type: str):
     """
     Get C-style array
     """
@@ -295,9 +295,9 @@ def get_c_array(name: str, arr: np.array):
 
         # Recursive case: format each element
         inner = ", ".join(format_recursive(x) for x in sub)
-        return "{ " + inner + " }"
+        return "{ " + inner + " }\n"
 
-    return f"float {name}" + "".join(f"[{d}]" for d in arr.shape) + " = " + format_recursive(arr)
+    return f"{c_type} {name}" + "".join(f"[{d}]" for d in arr.shape) + " = " + format_recursive(arr)
 
 # --- Main script
 
@@ -353,14 +353,16 @@ def main(Landmarks,Q_sim_factor=3, Py_sim_factor=1, Q_factor=2, Py_factor=2, kno
     NB_STEPS = 10
     file = open("golden_ref.h", "w")
 
-    # hxEst = xEst
+    hxEst = xEst
+    hPEst = PEst
+    hxEstNCols = [xEst.shape[0]]
+    hxEstNRows = [xEst.shape[1]]
+    hPEstNCols = [PEst.shape[0]]
+    hPEstNRows = [PEst.shape[1]]
 
 
     # Simulate motion and generate u and y
     for _ in range(NB_STEPS):
-        file.write(get_c_array("xEst_IN", xEst) + ";\n")
-
-
         uTrue = calc_input(speed, radius)
 
         xTrue, y, xDR, u = observation(xTrue, xDR, uTrue, Landmarks, Q_sim, Py_sim, MAX_RANGE)
@@ -373,15 +375,25 @@ def main(Landmarks,Q_sim_factor=3, Py_sim_factor=1, Q_factor=2, Py_factor=2, kno
 
         xEst, PEst = ekf_slam(xEst, PEst, u, y, M_DIST_TH, KNOWN_DATA_ASSOCIATION, Q, Py)
 
-        # hxEst = np.hstack((hxEst, xEst))
-        # file.write("xEst_OUT: " + str(xEst))
-        # file.write("PEst_OUT: " + str(PEst))
-        file.write(get_c_array("xEst_OUT", xEst) + ";\n")
-        file.write(get_c_array("PEst_OUT", PEst) + ";\n")
-        # print("xEst: ", xEst)
-        # print("PEst: ", PEst)
+        # If the new matrices grew in size, just fill the history with zeros
+        if xEst.shape[0] > hxEst.shape[0]:
+            hxEst = np.vstack((hxEst, np.zeros((xEst.shape[0] - hxEst.shape[0], hxEst.shape[1]))))
+        if PEst.shape[0] > hPEst.shape[0]:
+            hPEst = np.vstack((hPEst, np.zeros((PEst.shape[0] - hPEst.shape[0], hPEst.shape[1]))))
+
+        hxEst = np.hstack((hxEst, xEst))
+        hPEst = np.hstack((hPEst, PEst))
+        hxEstNCols.append(xEst.shape[0])
+        hxEstNRows.append(xEst.shape[1])
+        hPEstNCols.append(PEst.shape[0])
+        hPEstNRows.append(PEst.shape[1])
     
-    # file.write(get_c_array("hxEst", hxEst) + ";\n")
+    file.write(get_c_array("hxEst", hxEst, "float") + ";\n")
+    file.write(get_c_array("hPEst", hPEst, "float") + ";\n")
+    file.write(get_c_array("hxEstNCols", hxEstNCols, "int") + ";\n")
+    file.write(get_c_array("hxEstNRows", hxEstNRows, "int") + ";\n")
+    file.write(get_c_array("hPEstNCols", hPEstNCols, "int") + ";\n")
+    file.write(get_c_array("hPEstNRows", hPEstNRows, "int") + ";\n")
 
     file.close()
 
