@@ -2,9 +2,6 @@
 #define EKF_SLAM_HLS_H
 
 #include <cmath>
-#include <ap_axi_sdata.h>
-
-typedef ap_axiu<32, 4, 5, 5> AXI_VAL; // 8 bits pour l'interface AXI
 
 // --- HLS Constants ---
 #ifndef M_PI
@@ -20,8 +17,8 @@ typedef ap_axiu<32, 4, 5, 5> AXI_VAL; // 8 bits pour l'interface AXI
 #define MAX_COLS 13
 
 // --- Algorithm Constants ---
-const float DT = 0.1;           
-const float M_DIST_TH = 2.0;    
+const float DT = 0.1;
+const float M_DIST_TH = 2.0;
 
 typedef float data_t; // Changed in float to be in 32 bits and not 64 (double) which were to long for calculations
 
@@ -55,14 +52,14 @@ struct Matrix {
 };
 
 void ekf_slam(
-	const data_t x_in[MAX_ROWS], const int x_rows,
-	const data_t P_in[MAX_ROWS*MAX_ROWS], const int P_rows,
-	const data_t u_in[2],
-	const data_t z_in[3],
-	const data_t Q_in[2],
-	const data_t R_in[2],
-	data_t x_out[MAX_ROWS], int &x_rows_out,
-	data_t P_out[MAX_ROWS*MAX_ROWS], int &P_rows_out
+    data_t const x_in[MAX_ROWS], int x_rows,
+    data_t const P_in[MAX_ROWS*MAX_ROWS], int P_rows,
+    data_t const u_in[2],
+    data_t const z_in[3], // One observation at the time (range, bearing, id)
+    data_t const Q_in[2], // Diagonal of Q
+    data_t const R_in[2], // Diagonal of R
+    data_t x_out[MAX_ROWS], int &x_rows_out,
+    data_t P_out[MAX_ROWS*MAX_ROWS], int &P_rows_out
 );
 
 #endif

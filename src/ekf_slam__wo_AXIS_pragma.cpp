@@ -189,29 +189,11 @@ void ekf_slam(
 	const data_t P_in[MAX_ROWS*MAX_ROWS], const int P_rows,
 	const data_t u_in[2],
 	const data_t z_in[3],
+	const data_t Q_in[2],
+	const data_t R_in[2],
     data_t x_out[MAX_ROWS], int &x_rows_out,
     data_t P_out[MAX_ROWS*MAX_ROWS], int &P_rows_out
 ) {
- // --- Memory ports (AXI4 master) ---
-	#pragma HLS INTERFACE m_axi port=x_in  offset=slave bundle=matrices depth=13
-	#pragma HLS INTERFACE m_axi port=P_in  offset=slave bundle=matrices depth=169
-	#pragma HLS INTERFACE m_axi port=u_in  offset=slave bundle=matrices depth=2
-	#pragma HLS INTERFACE m_axi port=z_in  offset=slave bundle=matrices depth=3
-	#pragma HLS INTERFACE m_axi port=x_out offset=slave bundle=matrices depth=13
-	#pragma HLS INTERFACE m_axi port=P_out offset=slave bundle=matrices depth=169
-
-	// --- Control/status ports (AXI4-Lite) ---
-	#pragma HLS INTERFACE s_axilite port=x_rows       bundle=rows
-	#pragma HLS INTERFACE s_axilite port=P_rows       bundle=rows
-	#pragma HLS INTERFACE s_axilite port=x_rows_out   bundle=rows
-	#pragma HLS INTERFACE s_axilite port=P_rows_out   bundle=rows
-
-	// This exports the start/stop/control registers (ap_ctrl_hs)
-	#pragma HLS INTERFACE s_axilite port=return       bundle=control
-
-
-	const data_t Q_in[2] = {1.0, 1.0};
-	const data_t R_in[2] = {1.0, 1.0};
 
     Matrix xEst; xEst.rows = x_rows; xEst.cols = 1;
     for(int i=0; i<x_rows; i++) xEst.at(i, 0) = x_in[i];
@@ -347,7 +329,7 @@ void ekf_slam(
     x_rows_out = xEst.rows;
     P_rows_out = PEst.rows;
     
-    for(int i=0; i<xEst.rows; i++) x_out[i] = xEst.at(i, 0);
+    for(int i=0; i<x_rows_out; i++) x_out[i] = xEst.at(i, 0); 
     
     for(int i=0; i<MAX_ROWS*MAX_ROWS; i++) P_out[i] = PEst.data[i];
 }
