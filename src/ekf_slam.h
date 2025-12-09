@@ -52,14 +52,14 @@ struct Matrix {
 };
 
 void ekf_slam(
-    data_t x_in[MAX_ROWS], int x_rows,
-    data_t P_in[MAX_ROWS*MAX_ROWS], int P_rows,
-    data_t u_in[2],
-    data_t z_in[3], // One observation at the time (range, bearing, id)
-    data_t Q_in[2], // Diagonal of Q
-    data_t R_in[2], // Diagonal of R
-    data_t x_out[MAX_ROWS], int &x_rows_out,
-    data_t P_out[MAX_ROWS*MAX_ROWS], int &P_rows_out
+	const data_t x_in[MAX_ROWS], const int x_rows,
+	const data_t P_in[MAX_ROWS*MAX_ROWS], const int P_rows,
+	const data_t u_in[2],
+	const data_t z_in[3],
+	const data_t Q_in[2],
+	const data_t R_in[2],
+	data_t x_out[MAX_ROWS], int &x_rows_out,
+	data_t P_out[MAX_ROWS*MAX_ROWS], int &P_rows_out
 );
 
 #endif

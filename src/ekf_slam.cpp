@@ -185,15 +185,16 @@ void calc_innovation(const Matrix& xEst, const Matrix& PEst, const Matrix& z_mea
 // EKF SLAM Function
 
 void ekf_slam(
-    data_t x_in[MAX_ROWS], int x_rows,
-    data_t P_in[MAX_ROWS*MAX_ROWS], int P_rows,
-    data_t u_in[2],
-    data_t z_in[3], 
-    data_t Q_in[2], 
-    data_t R_in[2],
+    const data_t x_in[MAX_ROWS], const int x_rows,
+	const data_t P_in[MAX_ROWS*MAX_ROWS], const int P_rows,
+	const data_t u_in[2],
+	const data_t z_in[3],
+	const data_t Q_in[2],
+	const data_t R_in[2],
     data_t x_out[MAX_ROWS], int &x_rows_out,
     data_t P_out[MAX_ROWS*MAX_ROWS], int &P_rows_out
 ) {
+
     Matrix xEst; xEst.rows = x_rows; xEst.cols = 1;
     for(int i=0; i<x_rows; i++) xEst.at(i, 0) = x_in[i];
 
